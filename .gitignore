@@ -15,9 +15,16 @@ dist/
 build/
 out/
 .next/
+.gradle/
+*.class
 
 # IDE / OS
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
+*.hprof
+*.db
+*.db-wal
+*.db-shm
+
