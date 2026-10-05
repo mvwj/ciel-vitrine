@@ -1,5 +1,7 @@
 # Ciel Vitrine — normative architecture v29
 
+**Implementation status:** use [v30 accepted requirements and development plan](DEVELOPMENT_PLAN_RU.md) for current product decisions and the distinction between working code and remaining gates. This document remains an architecture draft.
+
 **Status:** normative working specification. This file replaces the chronological v1–v28 notebook as the source of truth for implementation decisions. Historical notebooks remain research notes only.
 
 **Audit basis for this revision:** the complete v26 audit is available and has been reconciled finding-by-finding: A01–A15, B01–B10, C01–C08 and D01–D11 (44 findings total). Section 22 records the normative disposition of every finding. Benchmark-class findings remain measurement obligations rather than protocol invariants.

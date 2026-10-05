@@ -26,6 +26,7 @@ fun main(args: Array<String>) {
     } catch (e: Exception) {
         System.err.println("Decode failed: ${e.message}")
         e.printStackTrace()
+        kotlin.system.exitProcess(1)
     }
 }
 
@@ -36,6 +37,7 @@ data class DecodeResult(
 )
 
 fun decodePos(inputFile: File, outputFile: File?): DecodeResult {
+    require(outputFile == null || inputFile.canonicalFile != outputFile.canonicalFile) { "Input and output must differ" }
     FileInputStream(inputFile).use { input ->
         // 1. Header (128 bytes)
         val headerBytes = ByteArray(128)
@@ -63,11 +65,18 @@ fun decodePos(inputFile: File, outputFile: File?): DecodeResult {
         val plannedLen = hBuf.long
         val transformId = hBuf.int
         val chunkSize = hBuf.int
+        val flags = hBuf.int
+        require(hLen == 128 && chunkSize in 1..4194304 && transformId in 0..1 && partIndex >= 0 && partCount >= 0 && (partCount == 0 || partIndex < partCount) && startOffset >= 0 && plannedLen >= 0 && flags and 7.inv() == 0)
+        val descriptor = ByteArray(32).also { hBuf.get(it) }
+        require(descriptor.contentEquals("CIEL_VITRINE_POS_V1_STANDARD".toByteArray(Charsets.US_ASCII).copyOf(32)))
+        require(headerBytes.sliceArray(96..127).all { it == 0.toByte() })
 
         val outStream = outputFile?.let { FileOutputStream(it) }
         val digest = MessageDigest.getInstance("SHA-256")
         var recordCount = 0L
         var totalBytes = 0L
+        val containerDigest = MessageDigest.getInstance("SHA-256").apply { update(headerBytes) }
+        var shortRecordSeen = false
 
         try {
             while (true) {
@@ -112,6 +121,8 @@ fun decodePos(inputFile: File, outputFile: File?): DecodeResult {
                 val recOffset = fullRecH.long
                 val payloadLen = fullRecH.int
                 val expectedCrc = fullRecH.int
+                require(!shortRecordSeen && recSeq == recordCount && recOffset == Math.addExact(startOffset, totalBytes) && payloadLen in 1..chunkSize) { "Invalid record bounds/order" }
+                shortRecordSeen = payloadLen < chunkSize
 
                 val payload = ByteArray(payloadLen)
                 var plRead = 0
@@ -122,6 +133,9 @@ fun decodePos(inputFile: File, outputFile: File?): DecodeResult {
                 }
 
                 val crc = CRC32()
+                containerDigest.update(probe)
+                containerDigest.update(restOfHeader)
+                containerDigest.update(payload)
                 crc.update(payload, 0, payloadLen)
                 if (crc.value.toInt() != expectedCrc) {
                     throw IllegalStateException("Record $recSeq CRC mismatch")
@@ -172,6 +186,8 @@ fun decodePos(inputFile: File, outputFile: File?): DecodeResult {
             fBuf.get(reserved)
             val marker = ByteArray(8)
             fBuf.get(marker)
+            require(fVer == version && fPartIdx == partIndex && reserved.all { it == 0.toByte() })
+            check(containerDigest.digest().contentEquals(contSha) && input.read() == -1) { "Container digest/trailing bytes mismatch" }
 
             if (!marker.contentEquals("COMPLETE".toByteArray())) {
                 throw IllegalStateException("Missing COMPLETE marker")
@@ -181,6 +197,7 @@ fun decodePos(inputFile: File, outputFile: File?): DecodeResult {
             if (partLen != totalBytes) throw IllegalStateException("Byte length mismatch")
 
             val computedSha = digest.digest()
+            if (partCount == 1) check(partIndex == 0 && startOffset == 0L && totalLen == totalBytes && totalSha.contentEquals(computedSha))
             if (!computedSha.contentEquals(partSha)) {
                 throw IllegalStateException("SHA-256 digest mismatch")
             }

@@ -31,6 +31,10 @@ class DestructiveSagaEngine(
     ): SagaExecutionResult {
         val reservationId = UUID.randomUUID().toString()
         val rvIds = resourceVersions.map { it.resourceVersionId }
+        val boundUris = resourceVersions.mapNotNull { controlDb.getPassport(it.resourceVersionId)?.sourceDescriptorAtEnd?.sourceUri }
+        if (boundUris.size != resourceVersions.size || localSourceUris.size != boundUris.size || localSourceUris.toSet() != boundUris.toSet()) {
+            return SagaExecutionResult(reservationId, false, "Deletion URIs do not match the complete source set")
+        }
 
         // Step 1 & 2: Durably acquire reservation (DEL-002, DB-004)
         val reservation = DestructiveReservation(
@@ -43,7 +47,8 @@ class DestructiveSagaEngine(
             expiresAt = System.currentTimeMillis() + 600_000, // 10 minutes
             status = ReservationStatus.ACTIVE
         )
-        controlDb.insertReservation(reservation)
+        if (!controlDb.tryAcquireReservation(reservation)) return SagaExecutionResult(reservationId, false, "Another destructive operation owns this resource set")
+        var externalEffectMayHaveStarted = false
 
         try {
             // Step 3-6: Evaluate strict safety predicate (DEL-005, DEL-006)
@@ -67,9 +72,9 @@ class DestructiveSagaEngine(
 
             // Step 7: Execute deletion step via platform adapter
             for (uri in localSourceUris) {
+                externalEffectMayHaveStarted = true
                 val ok = platformAdapter.deleteLocalSource(uri)
                 if (!ok) {
-                    controlDb.updateReservationStatus(reservationId, ReservationStatus.CANCELLED)
                     return SagaExecutionResult(
                         reservationId = reservationId,
                         isSuccess = false,
@@ -89,17 +94,17 @@ class DestructiveSagaEngine(
             }
 
             // Step 9: Commit observed result
-            controlDb.emitOutboxEvent(
+            controlDb.completeReservationWithEvent(
+                reservationId = reservationId,
                 eventType = "LOCAL_SOURCE_FREED",
-                payload = """{"assetId": "${asset.assetId}"}"""
+                payload = kotlinx.serialization.json.buildJsonObject { put("assetId", kotlinx.serialization.json.JsonPrimitive(asset.assetId)) }.toString()
             )
 
             // Step 10: Terminal release
-            controlDb.updateReservationStatus(reservationId, ReservationStatus.COMPLETED)
             return SagaExecutionResult(reservationId = reservationId, isSuccess = true)
 
         } catch (e: Exception) {
-            controlDb.updateReservationStatus(reservationId, ReservationStatus.CANCELLED)
+            if (!externalEffectMayHaveStarted) controlDb.updateReservationStatus(reservationId, ReservationStatus.CANCELLED)
             return SagaExecutionResult(
                 reservationId = reservationId,
                 isSuccess = false,

@@ -9,85 +9,70 @@ data class FreeUpEvaluationContext(
     val noKnownFork: Boolean,
     val reservationHeld: Boolean,
     val recoverableGalleryCatalogCommitExists: Boolean,
-    val policy: DeletionSafetyPolicy
+    val policy: DeletionSafetyPolicy,
+    val currentResourceSet: ResourceSetRevision? = null,
+    val expectedProviderAccountId: String = "",
+    val expectedVaultRootBinding: String = "",
+    val now: Long = System.currentTimeMillis(),
+    val maxEvidenceAgeMillis: Long = 60_000,
 )
 
-data class FreeUpEvaluationResult(
-    val isPermitted: Boolean,
-    val rejectionReasons: List<String>
-)
+data class FreeUpEvaluationResult(val isPermitted: Boolean, val rejectionReasons: List<String>)
 
-/**
- * DEL-005: Strict Free Up predicate.
- * DEL-006: Multi-resource all-or-partial semantics.
- */
+/** Conservative prototype preflight. It is not wired to Android deletion. */
 object FreeUpPredicate {
+    private val sha256 = Regex("[0-9a-fA-F]{64}")
 
-    fun evaluate(
-        asset: Asset,
-        resourceVersions: List<ResourceVersion>,
-        controlDb: ControlDatabase,
-        ctx: FreeUpEvaluationContext
-    ): FreeUpEvaluationResult {
+    fun evaluate(asset: Asset, resourceVersions: List<ResourceVersion>, controlDb: ControlDatabase, ctx: FreeUpEvaluationContext): FreeUpEvaluationResult {
         val reasons = mutableListOf<String>()
-
-        if (!ctx.explicitUserScopeIncludesLocalRemoval) {
-            reasons.add("User scope does not explicitly include local removal")
-        }
-        if (!ctx.acceptedWriterHeadFresh) {
-            reasons.add("Accepted writer head is stale")
-        }
-        if (!ctx.noKnownFork) {
-            reasons.add("Writer fork detected (WRITER_CONFLICT)")
-        }
-        if (!ctx.reservationHeld) {
-            reasons.add("Durable reservation is not held")
-        }
-        if (!ctx.recoverableGalleryCatalogCommitExists) {
-            reasons.add("Recoverable gallery catalog commit does not exist")
-        }
-
-        // Verify EVERY authoritative resource version
-        if (resourceVersions.isEmpty()) {
-            reasons.add("Asset has no associated resource versions")
-        }
-
+        if (!ctx.explicitUserScopeIncludesLocalRemoval) reasons += "User scope does not explicitly include local removal"
+        if (!ctx.acceptedWriterHeadFresh) reasons += "Accepted writer head is stale"
+        if (!ctx.noKnownFork) reasons += "Writer fork detected (WRITER_CONFLICT)"
+        if (!ctx.reservationHeld) reasons += "Durable reservation is not held"
+        if (!ctx.recoverableGalleryCatalogCommitExists) reasons += "Recoverable gallery catalog commit does not exist"
+        if (ctx.policy == DeletionSafetyPolicy.DEVELOPMENT_UNCHECKED) reasons += "Unchecked policy cannot authorize deletion"
+        if (ctx.expectedProviderAccountId.isBlank() || ctx.expectedVaultRootBinding.isBlank()) reasons += "Vault/account binding is missing"
+        if (ctx.maxEvidenceAgeMillis <= 0) reasons += "Invalid evidence freshness policy"
+        val set = ctx.currentResourceSet
+        val ids = resourceVersions.map { it.resourceVersionId }
+        if (set == null || !set.isCommitted || set.assetId != asset.assetId || set.resourceVersionIds.toSet() != ids.toSet() || ids.isEmpty() || ids.distinct().size != ids.size || set.resourceVersionIds.distinct().size != set.resourceVersionIds.size) reasons += "Complete committed resource-set revision is required"
+        if (resourceVersions.map { it.resourceId }.toSet() != asset.resourceIds.toSet() || resourceVersions.any { it.assetId != asset.assetId } || asset.primaryResourceId !in asset.resourceIds) reasons += "Resource versions do not cover this asset"
         for (rv in resourceVersions) {
-            val copies = controlDb.getCopiesForVersion(rv.resourceVersionId)
             val passport = controlDb.getPassport(rv.resourceVersionId)
-
-            if (passport == null) {
-                reasons.add("ResourceVersion ${rv.resourceVersionId} has no durably committed passport")
+            if (passport == null || passport.resourceVersionId != rv.resourceVersionId || passport.exactByteLength != rv.trustedOriginalByteLength || !passport.trustedOriginalSha256.equals(rv.trustedOriginalSha256, true) || !sha256.matches(rv.trustedOriginalSha256)) {
+                reasons += "ResourceVersion ${rv.resourceVersionId} has no matching durably committed passport"
                 continue
             }
-
-            val galleryCopy = copies.firstOrNull { it.role == CopyRole.GALLERY_STORE && it.state == CopyState.VERIFIED }
-            val archiveCopy = copies.firstOrNull { it.role == CopyRole.COLD_ARCHIVE && it.state == CopyState.VERIFIED }
-
-            if (galleryCopy == null) {
-                reasons.add("ResourceVersion ${rv.resourceVersionId} lacks verified Gallery Store copy")
-            } else {
-                val galleryEvidence = controlDb.getLatestEvidence(rv.resourceVersionId, galleryCopy.copyId)
-                if (galleryEvidence == null || !galleryEvidence.observedDownloadability) {
-                    reasons.add("ResourceVersion ${rv.resourceVersionId} lacks readable Gallery Store evidence")
+            if (rv.sourceRepresentationKind == SourceRepresentationKind.PLATFORM_REPRESENTATION || passport.sourceDescriptorAtStart != passport.sourceDescriptorAtEnd || passport.sourceDescriptorAtStart.sourceUri.isBlank()) reasons += "Source original/version is not stable for ${rv.resourceVersionId}"
+            val copies = controlDb.getCopiesForVersion(rv.resourceVersionId)
+            val roles = if (ctx.policy == DeletionSafetyPolicy.ARCHIVE_GATED_STRICT) listOf(CopyRole.GALLERY_STORE, CopyRole.COLD_ARCHIVE) else listOf(CopyRole.GALLERY_STORE)
+            val accepted = roles.mapNotNull { role ->
+                val copy = copies.firstOrNull { copy ->
+                    val e = controlDb.getLatestEvidence(rv.resourceVersionId, copy.copyId)
+                    copy.role == role && copy.state == CopyState.VERIFIED && copy.providerAccountId == ctx.expectedProviderAccountId && copy.observedRevision != null && e != null && evidenceMatches(rv, passport, copy, e, ctx)
                 }
+                if (copy == null) reasons += "ResourceVersion ${rv.resourceVersionId} lacks verified ${if (role == CopyRole.COLD_ARCHIVE) "Cold Archive" else "Gallery Store"} copy with bound readback evidence"
+                copy
             }
-
-            if (ctx.policy == DeletionSafetyPolicy.ARCHIVE_GATED_STRICT) {
-                if (archiveCopy == null) {
-                    reasons.add("ResourceVersion ${rv.resourceVersionId} lacks verified Cold Archive copy")
-                } else {
-                    val archiveEvidence = controlDb.getLatestEvidence(rv.resourceVersionId, archiveCopy.copyId)
-                    if (archiveEvidence == null || !archiveEvidence.observedDownloadability) {
-                        reasons.add("ResourceVersion ${rv.resourceVersionId} lacks readable Cold Archive evidence")
-                    }
-                }
-            }
+            if (accepted.map { it.physicalObjectSetId }.distinct().size != accepted.size) reasons += "Gallery and Archive share the same physical object"
         }
+        return FreeUpEvaluationResult(reasons.isEmpty(), reasons)
+    }
 
-        return FreeUpEvaluationResult(
-            isPermitted = reasons.isEmpty(),
-            rejectionReasons = reasons
-        )
+    private fun evidenceMatches(rv: ResourceVersion, passport: OriginalPassport, copy: ExactCopyLocation, e: VerificationEvidence, ctx: FreeUpEvaluationContext): Boolean {
+        if (!e.observedDownloadability || e.method != VerificationMethod.FULL_RECOVERY_READBACK || e.containerFormatVersion != 1 ||
+            e.resourceVersionId != rv.resourceVersionId || e.copyId != copy.copyId || e.providerAccountId != copy.providerAccountId || e.vaultRootBinding != ctx.expectedVaultRootBinding ||
+            e.originalByteLength != passport.exactByteLength || !e.trustedOriginalSha256.equals(passport.trustedOriginalSha256, true) ||
+            e.physicalObjectSetId != copy.physicalObjectSetId || e.observedCopyRevision != copy.observedRevision || e.invalidationGeneration != copy.invalidationGeneration ||
+            e.verifiedAt > ctx.now || ctx.now - e.verifiedAt > ctx.maxEvidenceAgeMillis || !sha256.matches(e.containerSha256) || e.containerBytes <= 0 || e.orderedParts.isEmpty()) return false
+        var offset = 0L
+        var bytes = 0L
+        if (e.orderedParts.map { it.partIdentity }.distinct().size != e.orderedParts.size) return false
+        for (part in e.orderedParts) {
+            if (part.partIdentity.isBlank() || part.startOffset != offset || part.endOffset < offset || part.size <= 0 || !sha256.matches(part.digest) || part.observedRevision.isNullOrBlank()) return false
+            offset = part.endOffset
+            bytes = try { Math.addExact(bytes, part.size) } catch (_: ArithmeticException) { return false }
+        }
+        return offset == passport.exactByteLength && bytes == e.containerBytes
     }
 }

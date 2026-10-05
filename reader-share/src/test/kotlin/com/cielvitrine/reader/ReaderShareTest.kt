@@ -13,6 +13,24 @@ import java.security.MessageDigest
 import java.util.UUID
 
 class ReaderShareTest {
+    @Test fun `corrupt footer reaches sequential consumer instead of successful EOF`() {
+        val bytes = ByteArray(500) { it.toByte() }
+        val file = File.createTempFile("corrupt-footer", ".pos").apply { deleteOnExit() }
+        file.outputStream().use { PosWriter.write(ByteArrayInputStream(bytes), it, ByteArray(16)) }
+        file.writeBytes(file.readBytes().dropLast(1).toByteArray())
+        val v = ResourceVersion("v", "r", "a", SourceRepresentationKind.EXACT_ORIGINAL, bytes.size.toLong(), sha256Hex(bytes), 0)
+        PosFileExactReader(v, file).use { reader ->
+            assertThrows(java.io.IOException::class.java) { reader.sequentialRead().use { it.readBytes() } }
+        }
+    }
+    @Test fun `random access rejects changed record payload`() {
+        val bytes = ByteArray(500) { it.toByte() }
+        val file = File.createTempFile("corrupt-record", ".pos").apply { deleteOnExit() }
+        file.outputStream().use { PosWriter.write(ByteArrayInputStream(bytes), it, ByteArray(16)) }
+        file.writeBytes(file.readBytes().apply { this[PosConstants.HEADER_LENGTH + PosConstants.RECORD_HEADER_LENGTH + 5] = 42 })
+        val v = ResourceVersion("v", "r", "a", SourceRepresentationKind.EXACT_ORIGINAL, bytes.size.toLong(), sha256Hex(bytes), 0)
+        PosFileExactReader(v, file).use { reader -> assertThrows(IllegalStateException::class.java) { reader.randomRead(0, 30) } }
+    }
 
     private fun sha256Hex(bytes: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }

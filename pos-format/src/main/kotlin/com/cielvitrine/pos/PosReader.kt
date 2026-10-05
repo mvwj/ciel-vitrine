@@ -24,6 +24,13 @@ object PosReader {
 
         // 1. Read Header
         val header = PosHeader.readFrom(pushback)
+        val containerDigest = MessageDigest.getInstance("SHA-256")
+        val digestOut = java.security.DigestOutputStream(object : OutputStream() {
+            override fun write(b: Int) {}
+            override fun write(b: ByteArray, off: Int, len: Int) {}
+        }, containerDigest)
+        header.writeTo(digestOut)
+        var shortRecordSeen = false
 
         // 2. Read records sequentially until footer magic is detected
         val recoveredDigest = MessageDigest.getInstance("SHA-256")
@@ -52,12 +59,16 @@ object PosReader {
 
             // Otherwise, it must be the start of a record
             pushback.unread(probe, 0, pRead)
-            val record = PosRecord.readFrom(pushback)
+            check(!shortRecordSeen) { "A short record must be final" }
+            val record = PosRecord.readFrom(pushback, header.recordChunkSize)
                 ?: throw IllegalStateException("Expected POS record at sequence $recordCount but got null")
 
             if (record.recordSeq != recordCount) {
                 throw IllegalStateException("Out of order record sequence: expected $recordCount, got ${record.recordSeq}")
             }
+            check(record.originalOffset == Math.addExact(header.originalStartOffset, recoveredBytes)) { "Non-contiguous original offset" }
+            shortRecordSeen = record.payloadLength < header.recordChunkSize
+            record.writeTo(digestOut)
 
             // Inverse transform
             val originalPayload = PosTransform.inverseTransform(
@@ -78,6 +89,9 @@ object PosReader {
 
         // 3. Read Footer
         val footer = PosFooter.readFrom(pushback)
+        check(footer.formatVersion == header.formatVersion && footer.partIndex == header.partIndex) { "Header/footer identity mismatch" }
+        check(containerDigest.digest().contentEquals(footer.containerSha256)) { "Container digest mismatch" }
+        check(pushback.read() == -1) { "Trailing bytes after completion footer" }
 
         if (footer.recordCount != recordCount) {
             throw IllegalStateException("Record count mismatch! Footer states ${footer.recordCount}, decoded $recordCount")
@@ -88,6 +102,9 @@ object PosReader {
         }
 
         val recoveredSha256 = recoveredDigest.digest()
+        if (header.partCount == 1) {
+            check(header.partIndex == 0 && header.originalStartOffset == 0L && footer.totalOriginalByteLength == recoveredBytes && footer.totalOriginalSha256.contentEquals(recoveredSha256)) { "Single-part whole original mismatch" }
+        }
         val isVerified = recoveredSha256.contentEquals(footer.partOriginalSha256)
         if (!isVerified) {
             throw IllegalStateException(

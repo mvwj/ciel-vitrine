@@ -16,7 +16,8 @@ data class ExactCopyLocation(
     val failureDomainIds: List<String>,
     val observedRevision: String?,
     val state: CopyState,
-    val lastObservedAt: Long
+    val lastObservedAt: Long,
+    val invalidationGeneration: Long = 0
 )
 
 enum class CopyRole {
@@ -53,7 +54,9 @@ data class VerificationEvidence(
     val method: VerificationMethod,
     val verifiedAt: Long,
     val observedDownloadability: Boolean,
-    val invalidationGeneration: Long = 0
+    val invalidationGeneration: Long = 0,
+    val physicalObjectSetId: String? = null,
+    val observedCopyRevision: String? = null
 )
 
 @Serializable

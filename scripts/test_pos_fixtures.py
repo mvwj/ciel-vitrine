@@ -1,30 +1,40 @@
-#!/usr/bin/env python3
-import os
+"""Run after :pos-format:test. Decodes actual production Kotlin output offline."""
+import contextlib
+import hashlib
+import io
+from pathlib import Path
 import sys
 import tempfile
-import hashlib
 
-sys.path.append(os.path.abspath("pos-reference-decoder/python"))
-import ciel_pos_decoder
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "pos-reference-decoder" / "python"))
+from ciel_pos_decoder import decode_pos_file
 
-def test_roundtrip_with_python():
-    print("Running Python POS reference decoder verification...")
-    # Create test original
-    temp_dir = tempfile.mkdtemp()
-    test_orig_path = os.path.join(temp_dir, "sample.bin")
-    test_recovered_path = os.path.join(temp_dir, "sample_recovered.bin")
-    
-    orig_data = b"Ciel Vitrine normative architecture v29 test vector: exact byte preservation. " * 500
-    with open(test_orig_path, "wb") as f:
-        f.write(orig_data)
-        
-    expected_sha256 = hashlib.sha256(orig_data).hexdigest()
-    print(f"Original size: {len(orig_data)} bytes, SHA-256: {expected_sha256}")
-    
-    # We can invoke the jar or Kotlin CLI to produce a POS file, or write POS format directly
-    # Let's test python decoder function
-    print("Testing parser safety and bounds...")
-    print("Verification complete.")
+
+def main():
+    fixtures = list((ROOT / "build" / "pos-fixtures").glob("*.pos"))
+    if len(fixtures) != 4:
+        raise AssertionError("Run ./gradlew :pos-format:test --rerun-tasks first")
+    with tempfile.TemporaryDirectory() as temp:
+        for fixture in fixtures:
+            output = Path(temp) / (fixture.stem + ".restored")
+            with contextlib.redirect_stdout(io.StringIO()):
+                result = decode_pos_file(str(fixture), str(output))
+            expected = fixture.with_suffix(".original").read_bytes()
+            assert output.read_bytes() == expected
+            assert result["sha256"] == hashlib.sha256(expected).hexdigest()
+            for mutation in (fixture.read_bytes()[:-1], fixture.read_bytes() + b"garbage"):
+                broken = Path(temp) / "broken.pos"
+                broken.write_bytes(mutation)
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        decode_pos_file(str(broken))
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("Corruption was accepted")
+            print(f"PASS independent recovery: {fixture.name}, {len(expected)} exact bytes")
+
 
 if __name__ == "__main__":
-    test_roundtrip_with_python()
+    main()

@@ -6,164 +6,112 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
-import java.util.UUID
+import java.sql.DriverManager
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 
 class SagaTest {
+    private lateinit var file: File
+    private lateinit var db: ControlDatabase
+    private val hash = "ab".repeat(32)
+    private val now = 1_000_000L
+    private val asset = Asset("a", "still", listOf("still", "motion"), 0, 0)
+    private val versions = listOf("still", "motion").map { ResourceVersion("v-$it", it, "a", SourceRepresentationKind.EXACT_ORIGINAL, 1000, hash, 0) }
+    private fun context() = FreeUpEvaluationContext(true, true, true, true, true, DeletionSafetyPolicy.ARCHIVE_GATED_STRICT,
+        ResourceSetRevision("set", "a", versions.map { it.resourceVersionId }, 1, true, now), "account", "vault", now)
+    private fun evidence(v: ResourceVersion, role: CopyRole, id: String = "${v.resourceVersionId}-$role") = VerificationEvidence(
+        "e-$id", v.resourceVersionId, 1000, hash, id, "account", "vault", 1, 1300, hash,
+        listOf(PartEvidence("part-$id", 0, 1000, 1300, hash, "revision")), VerificationMethod.FULL_RECOVERY_READBACK, now, true,
+        physicalObjectSetId = "physical-$id", observedCopyRevision = "revision")
 
-    private lateinit var tempDbFile: File
-    private lateinit var controlDb: ControlDatabase
-
-    @BeforeEach
-    fun setup() {
-        tempDbFile = File.createTempFile("control_test_", ".db")
-        tempDbFile.deleteOnExit()
-        controlDb = ControlDatabase(tempDbFile)
+    @BeforeEach fun setup() {
+        file = File.createTempFile("safety-", ".db").apply { deleteOnExit() }
+        db = ControlDatabase(file)
+        versions.forEach { v ->
+            db.insertResourceVersion(v)
+            val source = SourceDescriptor("content://source/${v.resourceId}", 1000, 0, "g1", SourceRepresentationKind.EXACT_ORIGINAL)
+            db.insertPassport(OriginalPassport(v.resourceVersionId, 1000, hash, source, source, mapOf("colorSpace" to "Display P3"), now))
+            listOf(CopyRole.GALLERY_STORE, CopyRole.COLD_ARCHIVE).forEach { role ->
+                val e = evidence(v, role)
+                db.upsertCopyLocation(ExactCopyLocation(e.copyId, v.resourceVersionId, role, "account", e.physicalObjectSetId!!, listOf("same-provider"), "revision", CopyState.VERIFIED, now))
+                db.insertVerificationEvidence(e)
+            }
+        }
     }
 
-    private fun createDummyPassport(rvId: String): OriginalPassport {
-        return OriginalPassport(
-            resourceVersionId = rvId,
-            exactByteLength = 1000L,
-            trustedOriginalSha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            sourceDescriptorAtStart = SourceDescriptor("uri", 1000L, 0L, null, SourceRepresentationKind.EXACT_ORIGINAL),
-            sourceDescriptorAtEnd = SourceDescriptor("uri", 1000L, 0L, null, SourceRepresentationKind.EXACT_ORIGINAL)
-        )
+    @Test fun `complete independent physical copies permit preflight`() { assertTrue(FreeUpPredicate.evaluate(asset, versions, db, context()).isPermitted) }
+    @Test fun `all proof and passport fields survive reopening database`() {
+        val reopened = ControlDatabase(file)
+        assertEquals(evidence(versions[0], CopyRole.COLD_ARCHIVE), reopened.getLatestEvidence("v-still", "v-still-COLD_ARCHIVE"))
+        assertEquals("Display P3", reopened.getPassport("v-still")!!.mediaDiagnostics["colorSpace"])
+        assertEquals("content://source/still", reopened.getPassport("v-still")!!.sourceDescriptorAtEnd.sourceUri)
     }
-
-    @Test
-    fun `test FreeUpPredicate rejects asset when missing Cold Archive evidence under strict policy`() {
-        val assetId = UUID.randomUUID().toString()
-        val rvId = UUID.randomUUID().toString()
-
-        val asset = Asset(assetId, rvId, listOf(rvId), 0L, 0L)
-        val rv = ResourceVersion(
-            rvId, "res-1", assetId, SourceRepresentationKind.EXACT_ORIGINAL,
-            1000L, "hash", 0L
-        )
-
-        controlDb.insertResourceVersion(rv)
-        controlDb.insertPassport(createDummyPassport(rvId))
-
-        // Only add Gallery Store copy, NO Cold Archive copy
-        val galleryCopy = ExactCopyLocation(
-            copyId = "copy-gallery",
-            resourceVersionId = rvId,
-            role = CopyRole.GALLERY_STORE,
-            providerAccountId = "acc-1",
-            physicalObjectSetId = "pos-1",
-            failureDomainIds = listOf("domain-1"),
-            observedRevision = "rev-1",
-            state = CopyState.VERIFIED,
-            lastObservedAt = System.currentTimeMillis()
-        )
-        controlDb.upsertCopyLocation(galleryCopy)
-        controlDb.insertVerificationEvidence(
-            VerificationEvidence(
-                evidenceId = "ev-1",
-                resourceVersionId = rvId,
-                originalByteLength = 1000L,
-                trustedOriginalSha256 = "hash",
-                copyId = "copy-gallery",
-                providerAccountId = "acc-1",
-                vaultRootBinding = "root",
-                containerFormatVersion = 1,
-                containerBytes = 1100L,
-                containerSha256 = "cont-hash",
-                orderedParts = emptyList(),
-                method = VerificationMethod.FULL_RECOVERY_READBACK,
-                verifiedAt = System.currentTimeMillis(),
-                observedDownloadability = true
-            )
-        )
-
-        val ctx = FreeUpEvaluationContext(
-            explicitUserScopeIncludesLocalRemoval = true,
-            acceptedWriterHeadFresh = true,
-            noKnownFork = true,
-            reservationHeld = true,
-            recoverableGalleryCatalogCommitExists = true,
-            policy = DeletionSafetyPolicy.ARCHIVE_GATED_STRICT
-        )
-
-        val result = FreeUpPredicate.evaluate(asset, listOf(rv), controlDb, ctx)
-        assertFalse(result.isPermitted)
-        assertTrue(result.rejectionReasons.any { it.contains("lacks verified Cold Archive copy") })
+    @Test fun `missing paired video blocks whole live photo`() { assertFalse(FreeUpPredicate.evaluate(asset, versions.take(1), db, context()).isPermitted) }
+    @Test fun `substituted source digest in readable evidence fails closed`() {
+        val e = evidence(versions[0], CopyRole.COLD_ARCHIVE).copy(evidenceId = "bad", trustedOriginalSha256 = "cd".repeat(32), verifiedAt = now + 1)
+        db.insertVerificationEvidence(e)
+        assertFalse(FreeUpPredicate.evaluate(asset, versions, db, context().copy(now = now + 1)).isPermitted)
     }
-
-    @Test
-    fun `test FreeUpPredicate permits when all copies verified for all resources`() {
-        val assetId = UUID.randomUUID().toString()
-        val rvId = UUID.randomUUID().toString()
-
-        val asset = Asset(assetId, rvId, listOf(rvId), 0L, 0L)
-        val rv = ResourceVersion(
-            rvId, "res-1", assetId, SourceRepresentationKind.EXACT_ORIGINAL,
-            1000L, "hash", 0L
-        )
-
-        controlDb.insertResourceVersion(rv)
-        controlDb.insertPassport(createDummyPassport(rvId))
-
-        // Add Gallery Store copy + evidence
-        val galleryCopy = ExactCopyLocation(
-            "copy-gallery", rvId, CopyRole.GALLERY_STORE, "acc-1", "pos-1",
-            listOf("domain-1"), "rev-1", CopyState.VERIFIED, System.currentTimeMillis()
-        )
-        controlDb.upsertCopyLocation(galleryCopy)
-        controlDb.insertVerificationEvidence(
-            VerificationEvidence(
-                "ev-g", rvId, 1000L, "hash", "copy-gallery", "acc-1", "root",
-                1, 1100L, "chash", emptyList(), VerificationMethod.FULL_RECOVERY_READBACK,
-                System.currentTimeMillis(), true
-            )
-        )
-
-        // Add Cold Archive copy + evidence
-        val archiveCopy = ExactCopyLocation(
-            "copy-archive", rvId, CopyRole.COLD_ARCHIVE, "acc-1", "pos-2",
-            listOf("domain-1"), "rev-2", CopyState.VERIFIED, System.currentTimeMillis()
-        )
-        controlDb.upsertCopyLocation(archiveCopy)
-        controlDb.insertVerificationEvidence(
-            VerificationEvidence(
-                "ev-a", rvId, 1000L, "hash", "copy-archive", "acc-1", "root",
-                1, 1100L, "chash2", emptyList(), VerificationMethod.FULL_RECOVERY_READBACK,
-                System.currentTimeMillis(), true
-            )
-        )
-
-        val ctx = FreeUpEvaluationContext(
-            explicitUserScopeIncludesLocalRemoval = true,
-            acceptedWriterHeadFresh = true,
-            noKnownFork = true,
-            reservationHeld = true,
-            recoverableGalleryCatalogCommitExists = true,
-            policy = DeletionSafetyPolicy.ARCHIVE_GATED_STRICT
-        )
-
-        val result = FreeUpPredicate.evaluate(asset, listOf(rv), controlDb, ctx)
-        assertTrue(result.isPermitted)
-        assertTrue(result.rejectionReasons.isEmpty())
+    @Test fun `stale and invalidated proofs fail closed`() {
+        assertFalse(FreeUpPredicate.evaluate(asset, versions, db, context().copy(now = now + 60_001)).isPermitted)
+        val copy = db.getCopiesForVersion("v-still").first { it.role == CopyRole.COLD_ARCHIVE }
+        db.upsertCopyLocation(copy.copy(invalidationGeneration = 1))
+        assertFalse(FreeUpPredicate.evaluate(asset, versions, db, context()).isPermitted)
     }
-
-    @Test
-    fun `test TrashEngine protects last copy after 60 days when not explicitly authorized`() {
-        val now = System.currentTimeMillis()
-        val trash = TrashEngine.createTrashRecord(
-            assetId = "asset-1",
-            authorizedPurgeScope = listOf(CopyRole.GALLERY_STORE),
-            explicitLastCopyPurgeAuthorized = false,
-            trashedAt = now - (61L * 24 * 60 * 60 * 1000) // 61 days ago
-        )
-
-        // If no remaining copies outside purge scope:
-        val status = TrashEngine.evaluateTrashExpiry(
-            trashRecord = trash,
-            currentTime = now,
-            remainingCopiesExcludingPurgeScope = emptyList()
-        )
-
-        // Must transition to EXPIRED_AWAITING_CONFIRMATION, never delete last copy silently (TRASH-003)
-        assertEquals(TrashStatus.EXPIRED_AWAITING_CONFIRMATION, status)
+    @Test fun `same physical object cannot count as two copies`() {
+        val v = versions[0]
+        val gallery = db.getCopiesForVersion(v.resourceVersionId).first { it.role == CopyRole.GALLERY_STORE }
+        val archive = db.getCopiesForVersion(v.resourceVersionId).first { it.role == CopyRole.COLD_ARCHIVE }
+        db.upsertCopyLocation(archive.copy(physicalObjectSetId = gallery.physicalObjectSetId))
+        db.insertVerificationEvidence(evidence(v, CopyRole.COLD_ARCHIVE).copy(evidenceId = "same", physicalObjectSetId = gallery.physicalObjectSetId, verifiedAt = now + 1))
+        assertFalse(FreeUpPredicate.evaluate(asset, versions, db, context().copy(now = now + 1)).isPermitted)
+    }
+    @Test fun `old prototype evidence cannot authorize removal`() {
+        DriverManager.getConnection("jdbc:sqlite:${file.absolutePath}").use { c -> c.createStatement().use { it.execute("UPDATE verification_evidence SET evidence_json = NULL") } }
+        assertFalse(FreeUpPredicate.evaluate(asset, versions, db, context()).isPermitted)
+    }
+    @Test fun `two database instances cannot reserve same version concurrently`() {
+        val barrier = CountDownLatch(1)
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            val attempts = (1..2).map { i -> pool.submit<Boolean> {
+                val other = ControlDatabase(file)
+                barrier.await()
+                other.tryAcquireReservation(DestructiveReservation("r$i", DestructiveOperationType.FREE_UP_DEVICE, "asset-$i", listOf("v-still"), emptyList(), now, now + 60000, status = ReservationStatus.ACTIVE))
+            } }
+            barrier.countDown()
+            assertEquals(1, attempts.count { it.get() })
+        } finally { pool.shutdownNow() }
+    }
+    @Test fun `uncertain platform deletion retains executing reservation`() {
+        val platform = object : PlatformDeletionAdapter {
+            override fun deleteLocalSource(uri: String): Boolean = throw IllegalStateException("Lost response after dispatch")
+            override fun verifySourceAbsent(uri: String) = false
+        }
+        val result = DestructiveSagaEngine(db, platform).executeFreeUpDevice(asset, versions, versions.map { "content://source/${it.resourceId}" }, context())
+        assertFalse(result.isSuccess)
+        assertEquals(ReservationStatus.EXECUTING, db.getActiveReservationsForAsset("a").single().status)
+        assertTrue(db.getUnrelayedOutboxEvents().isEmpty())
+    }
+    @Test fun `unrelated deletion URI is rejected before platform call`() {
+        val platform = object : PlatformDeletionAdapter {
+            override fun deleteLocalSource(uri: String): Boolean = error("Must not call")
+            override fun verifySourceAbsent(uri: String) = false
+        }
+        assertFalse(DestructiveSagaEngine(db, platform).executeFreeUpDevice(asset, versions, listOf("content://unrelated"), context()).isSuccess)
+    }
+    @Test fun `trash does not purge restored records or last compound resource`() {
+        val trash = TrashEngine.createTrashRecord("a", trashedAt = 0)
+        assertEquals(TrashStatus.EXPIRED_AWAITING_CONFIRMATION, TrashEngine.evaluateTrashExpiry(trash, Long.MAX_VALUE, db.getCopiesForVersion("v-still"), versions.map { it.resourceVersionId }.toSet()))
+        assertEquals(TrashStatus.RESTORED, TrashEngine.evaluateTrashExpiry(trash.copy(status = TrashStatus.RESTORED), Long.MAX_VALUE, emptyList()))
+    }
+    @Test fun `successful deletion commits terminal state with outbox`() {
+        val platform = object : PlatformDeletionAdapter {
+            override fun deleteLocalSource(uri: String) = true
+            override fun verifySourceAbsent(uri: String) = true
+        }
+        assertTrue(DestructiveSagaEngine(db, platform).executeFreeUpDevice(asset, versions, versions.map { "content://source/${it.resourceId}" }, context()).isSuccess)
+        assertTrue(db.getActiveReservationsForAsset("a").isEmpty())
+        assertEquals(1, db.getUnrelayedOutboxEvents().size)
     }
 }

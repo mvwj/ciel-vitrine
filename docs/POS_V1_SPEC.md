@@ -1,6 +1,7 @@
 # PortableOriginalSet (POS) v1 — Wire Format & Protocol Specification
 
-**Status:** P0 Protocol Specification (Normative for Ciel Vitrine v29)  
+**Status:** Experimental v1 wire layout; not a production release contract. See [accepted development plan](DEVELOPMENT_PLAN_RU.md) for the current milestones.
+**Implementation limits:** the writer supports single-part originals only; the following multipart manifest is a proposal. The bootstrap identifier does not embed the full decoding recipe. Ship the offline decoder/specification together with experimental exports until the next format closes this gap. Internal checksums establish consistency, not authenticity against a malicious provider.
 **Specifies:** POS-001, POS-002, POS-003, POS-004, POS-005, POS-006, POS-007, POS-008, POS-009, READ-003.
 
 ---

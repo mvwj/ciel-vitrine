@@ -51,23 +51,35 @@ class PosFileExactReader(
         val hBytes = ByteArray(PosConstants.HEADER_LENGTH)
         raf.readFully(hBytes)
         header = PosHeader.parse(hBytes)
+        require(header.partCount == 1 && header.partIndex == 0 && header.originalStartOffset == 0L) { "This reader supports single-part originals only" }
     }
 
     override val totalByteLength: Long = resourceVersion.trustedOriginalByteLength
 
     override fun sequentialRead(): InputStream {
-        val pipeIn = java.io.PipedInputStream()
+        val pipeIn = java.io.PipedInputStream(65536)
         val pipeOut = java.io.PipedOutputStream(pipeIn)
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
         Thread {
+            try {
             posFile.inputStream().use { input ->
-                pipeOut.use { output ->
-                    PosReader.read(input, output)
-                }
+                val result = PosReader.read(input, pipeOut)
+                check(result.recoveredByteLength == resourceVersion.trustedOriginalByteLength && result.recoveredSha256Hex.equals(resourceVersion.trustedOriginalSha256, true)) { "Recovered stream does not match trusted original" }
             }
-        }.start()
-        return pipeIn
+            } catch (e: Throwable) { failure.set(e) }
+            finally { pipeOut.close() }
+        }.apply { isDaemon = true; name = "pos-reader" }.start()
+        return object : java.io.FilterInputStream(pipeIn) {
+            override fun read(): Int = checked(super.read())
+            override fun read(b: ByteArray, off: Int, len: Int): Int = checked(super.read(b, off, len))
+            private fun checked(n: Int): Int {
+                if (n < 0) failure.get()?.let { throw java.io.IOException("POS recovery failed", it) }
+                return n
+            }
+        }
     }
 
+    @Synchronized
     override fun randomRead(offset: Long, length: Int): ByteArray {
         require(offset >= 0 && offset + length <= totalByteLength) { "Range out of bounds" }
         if (length == 0) return ByteArray(0)
@@ -100,9 +112,12 @@ class PosFileExactReader(
             val rOffset = buf.long
             val payloadLen = buf.int
             val expectedCrc = buf.int
+            check(rSeq == seq && rOffset == Math.multiplyExact(seq, header.recordChunkSize.toLong()) && payloadLen in 1..header.recordChunkSize) { "Invalid random-access record" }
 
             val payload = ByteArray(payloadLen)
             raf.readFully(payload)
+            val crc = java.util.zip.CRC32().apply { update(payload) }
+            check(crc.value.toInt() == expectedCrc) { "Random-access record CRC mismatch" }
 
             val plain = PosTransform.inverseTransform(
                 transformId = header.transformId,

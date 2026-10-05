@@ -21,6 +21,7 @@ class ControlDatabase(private val dbFile: File) {
     private fun getConnection(): Connection {
         val conn = DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}")
         conn.createStatement().use { stmt ->
+            stmt.execute("PRAGMA busy_timeout = 5000;")
             stmt.execute("PRAGMA journal_mode = WAL;")
             stmt.execute("PRAGMA synchronous = FULL;")
             stmt.execute("PRAGMA foreign_keys = ON;")
@@ -147,6 +148,17 @@ class ControlDatabase(private val dbFile: File) {
                     """.trimIndent()
                 )
             }
+            // Old prototype rows lack safety bindings. They remain unreadable as proofs
+            // until a fresh ingest/readback writes the complete serialized payload.
+            for ((table, column) in listOf("original_passports" to "passport_json", "verification_evidence" to "evidence_json", "exact_copy_locations" to "invalidation_generation")) {
+                val columns = mutableSetOf<String>()
+                conn.createStatement().use { statement ->
+                    statement.executeQuery("PRAGMA table_info($table)").use { rows ->
+                        while (rows.next()) columns.add(rows.getString("name"))
+                    }
+                    if (column !in columns) statement.execute("ALTER TABLE $table ADD COLUMN $column ${if (column == "invalidation_generation") "INTEGER NOT NULL DEFAULT 0" else "TEXT"}")
+                }
+            }
         }
     }
 
@@ -178,14 +190,15 @@ class ControlDatabase(private val dbFile: File) {
         getConnection().use { conn ->
             val sql = """
                 INSERT INTO original_passports (
-                    resource_version_id, exact_byte_length, trusted_original_sha256, committed_at
-                ) VALUES (?, ?, ?, ?);
+                    resource_version_id, exact_byte_length, trusted_original_sha256, committed_at, passport_json
+                ) VALUES (?, ?, ?, ?, ?);
             """.trimIndent()
             conn.prepareStatement(sql).use { ps ->
                 ps.setString(1, passport.resourceVersionId)
                 ps.setLong(2, passport.exactByteLength)
                 ps.setString(3, passport.trustedOriginalSha256)
                 ps.setLong(4, passport.committedAt)
+                ps.setString(5, json.encodeToString(passport))
                 ps.executeUpdate()
             }
         }
@@ -198,14 +211,8 @@ class ControlDatabase(private val dbFile: File) {
                 ps.setString(1, resourceVersionId)
                 val rs = ps.executeQuery()
                 if (rs.next()) {
-                    return OriginalPassport(
-                        resourceVersionId = rs.getString("resource_version_id"),
-                        exactByteLength = rs.getLong("exact_byte_length"),
-                        trustedOriginalSha256 = rs.getString("trusted_original_sha256"),
-                        sourceDescriptorAtStart = SourceDescriptor("", 0L, 0L, null, SourceRepresentationKind.EXACT_ORIGINAL),
-                        sourceDescriptorAtEnd = SourceDescriptor("", 0L, 0L, null, SourceRepresentationKind.EXACT_ORIGINAL),
-                        committedAt = rs.getLong("committed_at")
-                    )
+                    val payload = rs.getString("passport_json") ?: return null
+                    return json.decodeFromString<OriginalPassport>(payload)
                 }
             }
         }
@@ -219,8 +226,8 @@ class ControlDatabase(private val dbFile: File) {
             val sql = """
                 INSERT OR REPLACE INTO exact_copy_locations (
                     copy_id, resource_version_id, role, provider_account_id, physical_object_set_id,
-                    failure_domain_ids, observed_revision, state, last_observed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    failure_domain_ids, observed_revision, state, last_observed_at, invalidation_generation
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """.trimIndent()
             conn.prepareStatement(sql).use { ps ->
                 ps.setString(1, copy.copyId)
@@ -232,6 +239,7 @@ class ControlDatabase(private val dbFile: File) {
                 ps.setString(7, copy.observedRevision)
                 ps.setString(8, copy.state.name)
                 ps.setLong(9, copy.lastObservedAt)
+                ps.setLong(10, copy.invalidationGeneration)
                 ps.executeUpdate()
             }
         }
@@ -255,7 +263,8 @@ class ControlDatabase(private val dbFile: File) {
                             failureDomainIds = json.decodeFromString(rs.getString("failure_domain_ids")),
                             observedRevision = rs.getString("observed_revision"),
                             state = CopyState.valueOf(rs.getString("state")),
-                            lastObservedAt = rs.getLong("last_observed_at")
+                            lastObservedAt = rs.getLong("last_observed_at"),
+                            invalidationGeneration = rs.getLong("invalidation_generation")
                         )
                     )
                 }
@@ -272,8 +281,8 @@ class ControlDatabase(private val dbFile: File) {
                 INSERT INTO verification_evidence (
                     evidence_id, resource_version_id, copy_id, provider_account_id,
                     container_format_version, container_sha256, method,
-                    verified_at, observed_downloadability, invalidation_generation
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    verified_at, observed_downloadability, invalidation_generation, evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """.trimIndent()
             conn.prepareStatement(sql).use { ps ->
                 ps.setString(1, evidence.evidenceId)
@@ -286,6 +295,7 @@ class ControlDatabase(private val dbFile: File) {
                 ps.setLong(8, evidence.verifiedAt)
                 ps.setInt(9, if (evidence.observedDownloadability) 1 else 0)
                 ps.setLong(10, evidence.invalidationGeneration)
+                ps.setString(11, json.encodeToString(evidence))
                 ps.executeUpdate()
             }
         }
@@ -303,23 +313,8 @@ class ControlDatabase(private val dbFile: File) {
                 ps.setString(2, copyId)
                 val rs = ps.executeQuery()
                 if (rs.next()) {
-                    return VerificationEvidence(
-                        evidenceId = rs.getString("evidence_id"),
-                        resourceVersionId = rs.getString("resource_version_id"),
-                        originalByteLength = 0L,
-                        trustedOriginalSha256 = "",
-                        copyId = rs.getString("copy_id"),
-                        providerAccountId = rs.getString("provider_account_id"),
-                        vaultRootBinding = "",
-                        containerFormatVersion = rs.getInt("container_format_version"),
-                        containerBytes = 0L,
-                        containerSha256 = rs.getString("container_sha256"),
-                        orderedParts = emptyList(),
-                        method = VerificationMethod.valueOf(rs.getString("method")),
-                        verifiedAt = rs.getLong("verified_at"),
-                        observedDownloadability = rs.getInt("observed_downloadability") == 1,
-                        invalidationGeneration = rs.getLong("invalidation_generation")
-                    )
+                    val payload = rs.getString("evidence_json") ?: return null
+                    return json.decodeFromString<VerificationEvidence>(payload)
                 }
             }
         }
@@ -329,7 +324,33 @@ class ControlDatabase(private val dbFile: File) {
     // --- Destructive Reservations (DEL-002) ---
 
     fun insertReservation(reservation: DestructiveReservation) {
+        check(tryAcquireReservation(reservation)) { "Overlapping destructive reservation" }
+    }
+
+    fun tryAcquireReservation(reservation: DestructiveReservation): Boolean {
+        require(reservation.affectedResourceVersionIds.isNotEmpty() && reservation.status == ReservationStatus.ACTIVE)
         getConnection().use { conn ->
+            conn.createStatement().use { it.execute("BEGIN IMMEDIATE") }
+            try {
+                var overlaps = false
+                conn.createStatement().use { stmt ->
+                    stmt.executeQuery("SELECT * FROM destructive_reservations WHERE status IN ('ACTIVE','EXECUTING')").use { rows ->
+                        while (rows.next()) {
+                            val versions = json.decodeFromString<List<String>>(rows.getString("affected_resource_version_ids"))
+                            val copies = json.decodeFromString<List<String>>(rows.getString("target_copy_ids"))
+                            if (rows.getString("target_asset_id") == reservation.targetAssetId || versions.any { it in reservation.affectedResourceVersionIds } || copies.any { it in reservation.targetCopyIds }) overlaps = true
+                        }
+                    }
+                }
+                if (overlaps) { conn.createStatement().use { it.execute("ROLLBACK") }; return false }
+                insertReservation(conn, reservation)
+                conn.createStatement().use { it.execute("COMMIT") }
+                return true
+            } catch (e: Exception) { conn.createStatement().use { it.execute("ROLLBACK") }; throw e }
+        }
+    }
+
+    private fun insertReservation(conn: Connection, reservation: DestructiveReservation) {
             val sql = """
                 INSERT INTO destructive_reservations (
                     reservation_id, operation_type, target_asset_id,
@@ -349,6 +370,22 @@ class ControlDatabase(private val dbFile: File) {
                 ps.setString(9, reservation.status.name)
                 ps.executeUpdate()
             }
+    }
+
+    /** Result and relay intent either both commit or neither commits. */
+    fun completeReservationWithEvent(reservationId: String, eventType: String, payload: String) {
+        getConnection().use { conn ->
+            conn.autoCommit = false
+            try {
+                conn.prepareStatement("UPDATE destructive_reservations SET status = 'COMPLETED' WHERE reservation_id = ? AND status = 'EXECUTING'").use {
+                    it.setString(1, reservationId)
+                    check(it.executeUpdate() == 1) { "Reservation is not executing" }
+                }
+                conn.prepareStatement("INSERT INTO durable_outbox(event_id,event_type,payload,emitted_at,is_relayed) VALUES(?,?,?,?,0)").use {
+                    it.setString(1, java.util.UUID.randomUUID().toString()); it.setString(2, eventType); it.setString(3, payload); it.setLong(4, System.currentTimeMillis()); it.executeUpdate()
+                }
+                conn.commit()
+            } catch (e: Exception) { conn.rollback(); throw e }
         }
     }
 

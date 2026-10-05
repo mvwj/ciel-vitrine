@@ -30,15 +30,19 @@ object TrashEngine {
     fun evaluateTrashExpiry(
         trashRecord: TrashRecord,
         currentTime: Long,
-        remainingCopiesExcludingPurgeScope: List<ExactCopyLocation>
+        remainingCopiesExcludingPurgeScope: List<ExactCopyLocation>,
+        requiredResourceVersionIds: Set<String> = emptySet()
     ): TrashStatus {
+        if (trashRecord.status != TrashStatus.IN_TRASH && trashRecord.status != TrashStatus.EXPIRED_AWAITING_CONFIRMATION) return trashRecord.status
         if (currentTime < trashRecord.retainUntil) {
             return TrashStatus.IN_TRASH // Retention period has not expired yet
         }
 
         // 60 days reached:
-        val hasRemainingExactCopy = remainingCopiesExcludingPurgeScope.any {
-            it.state == CopyState.VERIFIED || it.state == CopyState.COMMITTED
+        val hasRemainingExactCopy = requiredResourceVersionIds.isNotEmpty() && requiredResourceVersionIds.all { id ->
+            remainingCopiesExcludingPurgeScope.any {
+                it.resourceVersionId == id && it.role !in trashRecord.authorizedPurgeScope && it.state == CopyState.VERIFIED
+            }
         }
 
         if (!hasRemainingExactCopy && !trashRecord.explicitLastCopyPurgeAuthorized) {

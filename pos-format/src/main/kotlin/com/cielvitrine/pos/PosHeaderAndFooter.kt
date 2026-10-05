@@ -21,6 +21,12 @@ data class PosHeader(
 ) {
     init {
         require(setId.size == 16) { "SetId must be exactly 16 bytes" }
+        require(formatVersion == 1 && headerLength == PosConstants.HEADER_LENGTH)
+        require(partIndex >= 0 && partCount >= 0 && (partCount == 0 || partIndex < partCount))
+        require(originalStartOffset >= 0 && plannedPartLength >= 0)
+        require(recordChunkSize in 1..PosConstants.MAX_CHUNK_SIZE)
+        require(transformId in 0..1) { "Unsupported transform" }
+        require(flags and 7.inv() == 0) { "Unsupported flags" }
     }
 
     fun toByteArray(): ByteArray {
@@ -90,6 +96,8 @@ data class PosHeader(
             val nullIdx = descBytes.indexOf(0)
             val descLen = if (nullIdx >= 0) nullIdx else 32
             val descriptor = String(descBytes, 0, descLen, StandardCharsets.US_ASCII)
+            require(descriptor == PosConstants.BOOTSTRAP_DESCRIPTOR && descBytes.drop(descLen).all { it == 0.toByte() }) { "Unsupported bootstrap descriptor" }
+            require(bytes.sliceArray(96..127).all { it == 0.toByte() }) { "Nonzero reserved header" }
 
             return PosHeader(
                 formatVersion = formatVersion,
@@ -122,6 +130,8 @@ data class PosFooter(
         require(totalOriginalSha256.size == 32) { "totalOriginalSha256 must be 32 bytes" }
         require(partOriginalSha256.size == 32) { "partOriginalSha256 must be 32 bytes" }
         require(containerSha256.size == 32) { "containerSha256 must be 32 bytes" }
+        require(formatVersion == 1 && partIndex >= 0)
+        require(totalOriginalByteLength >= 0 && partOriginalByteLength >= 0 && recordCount >= 0)
     }
 
     fun toByteArray(): ByteArray {
@@ -178,6 +188,7 @@ data class PosFooter(
 
             val reserved = ByteArray(18)
             buf.get(reserved)
+            require(reserved.all { it == 0.toByte() }) { "Nonzero reserved footer" }
             val marker = ByteArray(8)
             buf.get(marker)
             if (!marker.contentEquals(PosConstants.MARKER_COMPLETE)) {

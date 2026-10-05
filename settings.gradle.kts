@@ -16,6 +16,8 @@ dependencyResolutionManagement {
 
 rootProject.name = "ciel-vitrine"
 
+include(":app")
+
 include(":core-model")
 include(":pos-format")
 include(":pos-reference-decoder")

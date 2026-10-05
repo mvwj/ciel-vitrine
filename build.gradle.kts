@@ -1,6 +1,8 @@
 plugins {
-    kotlin("jvm") version "2.1.0" apply false
-    kotlin("plugin.serialization") version "2.1.0" apply false
+    kotlin("jvm") version "2.2.10" apply false
+    kotlin("plugin.serialization") version "2.2.10" apply false
+    id("com.android.application") version "9.1.0" apply false
+    id("org.jetbrains.kotlin.plugin.compose") version "2.2.10" apply false
 }
 
 allprojects {
@@ -9,11 +11,12 @@ allprojects {
 }
 
 subprojects {
+    if (name == "app") return@subprojects
     apply(plugin = "org.jetbrains.kotlin.jvm")
     apply(plugin = "org.jetbrains.kotlin.plugin.serialization")
 
     configure<org.jetbrains.kotlin.gradle.dsl.KotlinJvmProjectExtension> {
-        jvmToolchain(21)
+        jvmToolchain(17)
     }
 
     dependencies {

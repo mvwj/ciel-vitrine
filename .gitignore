@@ -27,4 +27,12 @@ Thumbs.db
 *.db
 *.db-wal
 *.db-shm
+local.properties
+*.apk
+*.aab
+__pycache__/
+*.pyc
+artifacts/
+.kotlin/
+emulator-*.log
 

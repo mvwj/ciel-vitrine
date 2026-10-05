@@ -42,7 +42,7 @@ data class PosRecord(
             )
         }
 
-        fun readFrom(input: InputStream): PosRecord? {
+        fun readFrom(input: InputStream, maxPayloadLength: Int = PosConstants.MAX_CHUNK_SIZE): PosRecord? {
             val headerBytes = ByteArray(PosConstants.RECORD_HEADER_LENGTH)
             var read = 0
             while (read < PosConstants.RECORD_HEADER_LENGTH) {
@@ -66,6 +66,7 @@ data class PosRecord(
             val originalOffset = buf.long
             val payloadLen = buf.int
             val expectedCrc = buf.int
+            require(recordSeq >= 0 && originalOffset >= 0 && payloadLen in 1..maxPayloadLength) { "Invalid/beyond-limit record" }
 
             val payload = ByteArray(payloadLen)
             var pRead = 0

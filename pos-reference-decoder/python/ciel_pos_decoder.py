@@ -49,6 +49,8 @@ def decode_pos_file(input_path, output_path=None):
     Decodes a POS v1 file into its exact original bytes.
     Validates record CRC-32, container completion, byte length, and SHA-256.
     """
+    if output_path and os.path.realpath(input_path) == os.path.realpath(output_path):
+        raise ValueError("Input and output must differ")
     with open(input_path, 'rb') as f:
         # 1. Read and parse 128-byte header
         header_bytes = f.read(HEADER_LENGTH)
@@ -65,9 +67,15 @@ def decode_pos_file(input_path, output_path=None):
         part_idx, part_cnt, start_offset, planned_len, transform_id, chunk_size, flags = struct.unpack(
             '>IIQQIII', header_bytes[28:64]
         )
+        if h_len != 128 or not 1 <= chunk_size <= 4194304 or transform_id not in (0, 1):
+            raise ValueError("Invalid header bounds/transform")
+        if (part_cnt and part_idx >= part_cnt) or flags & ~7 or any(header_bytes[96:128]):
+            raise ValueError("Invalid part/flags/reserved bytes")
 
         desc_raw = header_bytes[64:96]
         desc = desc_raw.split(b'\x00')[0].decode('ascii', errors='ignore')
+        if desc_raw != b'CIEL_VITRINE_POS_V1_STANDARD'.ljust(32, b'\x00'):
+            raise ValueError("Unsupported bootstrap descriptor")
 
         print(f"[POS-Decoder] Header OK: SetID={set_id.hex()}, Part={part_idx}/{part_cnt}, Transform={transform_id}, Desc='{desc}'")
 
@@ -76,6 +84,8 @@ def decode_pos_file(input_path, output_path=None):
         hasher = hashlib.sha256()
         record_count = 0
         total_recovered_bytes = 0
+        container_hasher = hashlib.sha256(header_bytes)
+        short_record_seen = False
 
         try:
             while True:
@@ -100,10 +110,15 @@ def decode_pos_file(input_path, output_path=None):
                     raise ValueError(f"Corrupted record magic: {r_magic}")
                 if r_seq != record_count:
                     raise ValueError(f"Out of order record sequence: expected {record_count}, got {r_seq}")
+                if short_record_seen or not 1 <= r_len <= chunk_size or r_offset != start_offset + total_recovered_bytes:
+                    raise ValueError("Invalid record length/offset")
+                short_record_seen = r_len < chunk_size
 
                 r_payload = f.read(r_len)
                 if len(r_payload) < r_len:
                     raise ValueError(f"Truncated payload in record {r_seq}")
+                container_hasher.update(rec_hdr_bytes)
+                container_hasher.update(r_payload)
 
                 # Verify CRC32
                 computed_crc = zlib.crc32(r_payload) & 0xFFFFFFFF
@@ -125,12 +140,16 @@ def decode_pos_file(input_path, output_path=None):
                 raise ValueError("Truncated POS footer")
 
             f_magic, f_ver, f_part_idx, total_len, total_sha, part_len, part_sha, f_rec_count, cont_sha = struct.unpack(
-                '>8sHIQ32sQQ32s', footer_bytes[0:134]
+                '>8sHIQ32sQ32sQ32s', footer_bytes[0:134]
             )
             marker = footer_bytes[152:160]
 
             if f_magic != FOOTER_MAGIC:
                 raise ValueError(f"Corrupted footer magic: {f_magic}")
+            if f_ver != version or f_part_idx != part_idx or any(footer_bytes[134:152]):
+                raise ValueError("Footer identity/reserved mismatch")
+            if container_hasher.digest() != cont_sha or f.read(1):
+                raise ValueError("Container digest mismatch or trailing bytes")
             if marker != MARKER_COMPLETE:
                 raise ValueError(f"Missing COMPLETE marker: container is incomplete or corrupted")
             if f_rec_count != record_count:
@@ -139,6 +158,8 @@ def decode_pos_file(input_path, output_path=None):
                 raise ValueError(f"Length mismatch: footer says {part_len}, recovered {total_recovered_bytes}")
 
             actual_sha = hasher.digest()
+            if part_cnt == 1 and (part_idx != 0 or start_offset != 0 or total_len != total_recovered_bytes or total_sha != actual_sha):
+                raise ValueError("Whole original mismatch")
             if actual_sha != part_sha:
                 raise ValueError(f"SHA-256 digest mismatch!\nExpected: {part_sha.hex()}\nActual:   {actual_sha.hex()}")
 

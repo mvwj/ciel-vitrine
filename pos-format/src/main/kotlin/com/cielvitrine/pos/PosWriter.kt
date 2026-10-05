@@ -30,8 +30,11 @@ object PosWriter {
         transformId: Int = PosConstants.TRANSFORM_POS_XOR_V1,
         chunkSize: Int = PosConstants.DEFAULT_CHUNK_SIZE
     ): PosWriteResult {
+        require(partCount == 1 && partIndex == 0 && originalStartOffset == 0L) { "Multipart writing is not implemented; never label a part as a complete set" }
         val containerDigest = MessageDigest.getInstance("SHA-256")
-        val containerOut = DigestOutputStream(destinationOutput, containerDigest)
+        val wholeObjectDigest = MessageDigest.getInstance("SHA-256")
+        val wholeObjectOut = DigestOutputStream(destinationOutput, wholeObjectDigest)
+        val containerOut = DigestOutputStream(wholeObjectOut, containerDigest)
 
         // 1. Write Header
         val header = PosHeader(
@@ -88,6 +91,7 @@ object PosWriter {
         }
 
         val partSha256Bytes = sourceDigest.digest()
+        require(totalOriginalByteLength == 0L || totalOriginalByteLength == partOriginalBytes) { "Source length changed" }
         val totalLen = if (totalOriginalByteLength > 0L) totalOriginalByteLength else partOriginalBytes
         val totalSha256Bytes = partSha256Bytes // For single-part, part == total
 
@@ -102,7 +106,7 @@ object PosWriter {
             recordCount = recordSeq,
             containerSha256 = containerShaPreFooter
         )
-        footer.writeTo(destinationOutput) // write footer to destination directly
+        footer.writeTo(wholeObjectOut) // Footer digest covers the prefix; object digest covers the complete file.
         totalContainerBytes += PosConstants.FOOTER_LENGTH
 
         destinationOutput.flush()
@@ -116,7 +120,7 @@ object PosWriter {
             totalOriginalSha256Hex = totalSha256Bytes.toHex(),
             recordCount = recordSeq,
             containerByteLength = totalContainerBytes,
-            containerSha256Hex = containerShaPreFooter.toHex()
+            containerSha256Hex = wholeObjectDigest.digest().toHex()
         )
     }
 

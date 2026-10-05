@@ -8,6 +8,7 @@ object PosConstants {
     const val FOOTER_LENGTH: Int = 160
     const val RECORD_HEADER_LENGTH: Int = 28 // 4 magic + 8 seq + 8 offset + 4 len + 4 crc
     const val DEFAULT_CHUNK_SIZE: Int = 65536 // 64 KiB
+    const val MAX_CHUNK_SIZE: Int = 4 * 1024 * 1024
 
     val MAGIC_HEADER = "CIELPOS1".toByteArray(StandardCharsets.US_ASCII)
     val MAGIC_RECORD = "PREC".toByteArray(StandardCharsets.US_ASCII)
