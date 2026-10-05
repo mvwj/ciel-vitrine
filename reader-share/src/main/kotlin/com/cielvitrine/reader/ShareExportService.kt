@@ -73,7 +73,16 @@ object ShareExportService {
             exportToStream(reader, out)
         }
 
-        // Now reread and hash destination file directly (DESTINATION_READBACK_VERIFIED)
+        return verifyDestinationFile(reader, destinationFile)
+    }
+
+    /**
+     * SHARE-005: Re-opens destination file and verifies its exact bytes against the trusted reader passport.
+     */
+    fun verifyDestinationFile(
+        reader: ExactOriginalReader,
+        destinationFile: File
+    ): ExportResult {
         val readbackDigest = MessageDigest.getInstance("SHA-256")
         val buffer = ByteArray(65536)
         var readbackBytes = 0L
@@ -90,11 +99,11 @@ object ShareExportService {
         val readbackSha = readbackDigest.digest().joinToString("") { "%02x".format(it) }
 
         if (readbackBytes != reader.totalByteLength) {
-            throw IllegalStateException("Destination file readback length mismatch!")
+            throw IllegalStateException("Destination file readback length mismatch: expected ${reader.totalByteLength}, got $readbackBytes")
         }
 
         if (!readbackSha.equals(reader.resourceVersion.trustedOriginalSha256, ignoreCase = true)) {
-            throw IllegalStateException("Destination file readback SHA-256 mismatch!")
+            throw IllegalStateException("Destination file readback SHA-256 mismatch: expected ${reader.resourceVersion.trustedOriginalSha256}, got $readbackSha")
         }
 
         return ExportResult(
@@ -105,3 +114,4 @@ object ShareExportService {
         )
     }
 }
+

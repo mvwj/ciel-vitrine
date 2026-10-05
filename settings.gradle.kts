@@ -24,3 +24,6 @@ include(":control-storage")
 include(":catalog-storage")
 include(":saga-engine")
 include(":reader-share")
+include(":provider-adapter")
+include(":state-machine-tests")
+
