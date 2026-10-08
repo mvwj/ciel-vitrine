@@ -8,6 +8,52 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
 class YandexDiskClientTest {
+    @Test fun `connection requires client identity disk information and application folder`() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"id":"123","client_id":"public-client","login":"test-user"}"""))
+            server.enqueue(MockResponse().setBody("""{"total_space":1000,"used_space":100,"user":{"uid":"123"}}"""))
+            server.enqueue(MockResponse().setBody("""{"type":"dir","path":"disk:/Applications/Test","resource_id":"root-object"}"""))
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient(), server.url("/info"))
+            val info = client.connectionInfo("public-client")
+            assertEquals("123", info.uid)
+            assertEquals("test-user", info.label)
+            assertEquals(1000L, info.totalBytes)
+            assertEquals("root-object", info.appRootId)
+            val requests = List(3) { server.takeRequest() }
+            assertTrue(requests.all { it.method == "GET" && it.getHeader("Authorization") == "OAuth test-token" })
+            assertEquals("json", requests[0].requestUrl!!.queryParameter("format"))
+            assertEquals("/v1/disk", requests[1].requestUrl!!.encodedPath)
+            assertEquals("app:/", requests[2].requestUrl!!.queryParameter("path"))
+        }
+    }
+    @Test fun `wrong OAuth client cannot proceed to Disk`() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"id":"123","client_id":"other-app"}"""))
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient(), server.url("/info"))
+            val failure = assertThrows(YandexDiskClient.ConnectionException::class.java) { client.connectionInfo("public-client") }
+            assertEquals(YandexDiskClient.ConnectionProblem.IDENTITY_MISMATCH, failure.problem)
+            assertEquals(1, server.requestCount)
+        }
+    }
+    @Test fun `identity success does not bypass missing Disk rights`() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"id":"123","client_id":"public-client"}"""))
+            server.enqueue(MockResponse().setResponseCode(403))
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient(), server.url("/info"))
+            val failure = assertThrows(YandexDiskClient.ConnectionException::class.java) { client.connectionInfo("public-client") }
+            assertEquals(YandexDiskClient.ConnectionProblem.DISK_PERMISSION, failure.problem)
+        }
+    }
+    @Test fun `different Disk UID and denied app folder cannot be connected`() {
+        listOf(true, false).forEach { wrongUid -> MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"id":"123","client_id":"public-client"}"""))
+            server.enqueue(MockResponse().setBody("""{"total_space":1000,"used_space":100,"user":{"uid":"${if (wrongUid) "456" else "123"}"}}"""))
+            if (!wrongUid) server.enqueue(MockResponse().setResponseCode(403))
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient(), server.url("/info"))
+            val failure = assertThrows(YandexDiskClient.ConnectionException::class.java) { client.connectionInfo("public-client") }
+            assertEquals(if (wrongUid) YandexDiskClient.ConnectionProblem.IDENTITY_MISMATCH else YandexDiskClient.ConnectionProblem.APP_FOLDER_PERMISSION, failure.problem)
+        } }
+    }
     @Test fun `missing path access denial and unavailable service stay distinct`() {
         MockWebServer().use { server ->
             val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient())

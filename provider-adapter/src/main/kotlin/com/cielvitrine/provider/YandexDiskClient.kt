@@ -15,6 +15,7 @@ class YandexDiskClient internal constructor(
     private val token: () -> String,
     private val api: HttpUrl,
     private val http: OkHttpClient,
+    private val identityApi: HttpUrl = "https://login.yandex.ru/info".toHttpUrl(),
 ) {
     constructor(token: () -> String) : this(token, "https://cloud-api.yandex.net/v1/disk/".toHttpUrl(),
         OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
@@ -25,6 +26,46 @@ class YandexDiskClient internal constructor(
     )
     data class Observation(val presence: ProviderObjectPresence, val resource: Resource? = null)
     data class UploadReceipt(val accepted: Boolean, val needsReconciliation: Boolean)
+
+    data class Account(val uid: String, val label: String, val totalBytes: Long, val usedBytes: Long, val appRootId: String?)
+    enum class ConnectionProblem { UNAUTHORIZED, DISK_PERMISSION, APP_FOLDER_PERMISSION, APP_FOLDER_UNAVAILABLE, IDENTITY_MISMATCH, UNAVAILABLE }
+    class ConnectionException(val problem: ConnectionProblem) : Exception(problem.name)
+
+    /** Read-only probes. Never creates folders or uploads files during sign-in. */
+    fun connectionInfo(expectedClientId: String): Account {
+        val identityRequest = Request.Builder().url(identityApi.newBuilder().addQueryParameter("format", "json").build())
+            .header("Authorization", authorization()).get().build()
+        val identity = http.newCall(identityRequest).execute().use { response ->
+            if (response.code == 401 || response.code == 403) throw ConnectionException(ConnectionProblem.UNAUTHORIZED)
+            if (response.code != 200) throw ConnectionException(ConnectionProblem.UNAVAILABLE)
+            boundedJson(response.body ?: throw ConnectionException(ConnectionProblem.UNAVAILABLE))
+        }
+        val uid = identity["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.matches(Regex("[0-9]{1,32}")) }
+            ?: throw ConnectionException(ConnectionProblem.IDENTITY_MISMATCH)
+        if (identity["client_id"]?.jsonPrimitive?.contentOrNull != expectedClientId) throw ConnectionException(ConnectionProblem.IDENTITY_MISMATCH)
+        val disk = http.newCall(apiRequest("", mapOf("fields" to "total_space,used_space,user.uid"))).execute().use { response ->
+            if (response.code == 401) throw ConnectionException(ConnectionProblem.UNAUTHORIZED)
+            if (response.code == 403) throw ConnectionException(ConnectionProblem.DISK_PERMISSION)
+            if (response.code != 200) throw ConnectionException(ConnectionProblem.UNAVAILABLE)
+            boundedJson(response.body ?: throw ConnectionException(ConnectionProblem.UNAVAILABLE))
+        }
+        val diskUid = (disk["user"] as? JsonObject)?.get("uid")?.jsonPrimitive?.contentOrNull
+        if (diskUid != null && diskUid != uid) throw ConnectionException(ConnectionProblem.IDENTITY_MISMATCH)
+        val total = disk["total_space"]?.jsonPrimitive?.longOrNull?.takeIf { it >= 0 }
+            ?: throw ConnectionException(ConnectionProblem.UNAVAILABLE)
+        val used = disk["used_space"]?.jsonPrimitive?.longOrNull?.takeIf { it >= 0 }
+            ?: throw ConnectionException(ConnectionProblem.UNAVAILABLE)
+        val root = http.newCall(apiRequest("resources", mapOf("path" to "app:/", "fields" to "type,path,resource_id"))).execute().use { response ->
+            if (response.code == 401) throw ConnectionException(ConnectionProblem.UNAUTHORIZED)
+            if (response.code == 403) throw ConnectionException(ConnectionProblem.APP_FOLDER_PERMISSION)
+            if (response.code == 404) throw ConnectionException(ConnectionProblem.APP_FOLDER_UNAVAILABLE)
+            if (response.code != 200) throw ConnectionException(ConnectionProblem.UNAVAILABLE)
+            boundedJson(response.body ?: throw ConnectionException(ConnectionProblem.UNAVAILABLE))
+        }
+        if (root["type"]?.jsonPrimitive?.contentOrNull != "dir") throw ConnectionException(ConnectionProblem.APP_FOLDER_UNAVAILABLE)
+        val label = identity["display_name"]?.jsonPrimitive?.contentOrNull ?: identity["login"]?.jsonPrimitive?.contentOrNull ?: uid
+        return Account(uid, label.take(120), total, used, root["resource_id"]?.jsonPrimitive?.contentOrNull)
+    }
 
     fun inspect(path: String): Observation {
         val request = apiRequest("resources", mapOf("path" to path, "fields" to "path,resource_id,size,sha256,modified,type"))
@@ -103,7 +144,10 @@ class YandexDiskClient internal constructor(
         return "OAuth $value"
     }
     private fun apiRequest(endpoint: String, args: Map<String, String>): Request {
-        val url = api.newBuilder().addPathSegments(endpoint).apply { args.forEach { (k, v) -> addQueryParameter(k, v) } }.build()
+        val builder = api.newBuilder()
+        if (endpoint.isEmpty() && api.pathSegments.last() == "") builder.removePathSegment(api.pathSegments.lastIndex)
+        else builder.addPathSegments(endpoint)
+        val url = builder.apply { args.forEach { (k, v) -> addQueryParameter(k, v) } }.build()
         return Request.Builder().url(url).header("Authorization", authorization()).get().build()
     }
     private fun boundedJson(body: okhttp3.ResponseBody): JsonObject {

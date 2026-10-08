@@ -2,21 +2,23 @@
 
 Android gallery with exact-byte originals, archive-first cloud workflow and explicitly scoped deletion. One connected provider at a time; Yandex Disk is the first integration, Google Drive follows.
 
-## Current milestone: 0.1.0
+## Current milestone: 0.1.1
 
 - Native Compose gallery: real MediaStore images/videos, paginated recent additions, device folders, local albums, favorites, photo/GIF viewer and Media3 video playback.
 - Full/selected/mixed media access is visible. A revoked grant is never treated as deletion.
 - Experimental POS v1 creation and recovery through Android's document picker. Both operations reread the destination and compare SHA-256 and exact length. The source is never removed.
 - Conservative JVM safety prototype: complete compound resource sets, bound proof persistence, separate physical copies, transactional reservations, atomic terminal state/outbox and 60-day Trash preflight.
-- Initial Yandex REST client: metadata observation, upload without overwrite and streamed readback. It is **not connected to Android UI yet**. OAuth, persistent cloud jobs and real-provider probes are next.
+- Yandex LoginSDK with the registered public Client ID, device-local AES-GCM/Android Keystore session storage and read-only identity/Disk/app-folder checks. A saved account cannot be silently rebound. A successful real-account sign-in is still pending device validation.
+- Initial Yandex REST client: metadata observation, upload without overwrite and streamed readback. Upload/readback queues are **not connected to Android UI yet**; persistent jobs and real-provider recovery probes are next.
 
-Cloud upload, cloud-only viewing, automatic cleanup and destructive actions are not available in this APK. JDBC stores are JVM prototypes; Android production storage needs its own implementation. POS v1 is a public reversible transform, **not confidential encryption**. Its header does not carry a complete decoding recipe; keep the offline recovery package below until this gap is closed.
+Cloud upload, cloud-only viewing, automatic cleanup and destructive actions are not available in this APK. JDBC stores are JVM prototypes; Android production storage needs its own implementation. POS v1 is a public reversible transform, **not confidential encryption**. Its header does not carry a complete decoding recipe; keep the offline recovery package below until this gap is closed. CI APKs use a different debug certificate; use the local 0.1.1 APK for the currently registered OAuth fingerprint.
 
 ## Design
 
 - [Accepted requirements, findings and development plan](docs/DEVELOPMENT_PLAN_RU.md)
 - [Yandex OAuth setup](docs/YANDEX_SETUP_RU.md)
 - [Milestone validation](docs/VALIDATION_0_1_RU.md)
+- [Yandex sign-in milestone validation](docs/VALIDATION_0_1_1_RU.md)
 - [v26 audit](gallery_architecture_v26_audit_ru.md)
 - [v29 working specification](docs/SPEC_V29.md)
 - [Experimental POS v1 byte layout](docs/POS_V1_SPEC.md)

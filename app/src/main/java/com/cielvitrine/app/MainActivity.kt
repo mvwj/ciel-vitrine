@@ -53,6 +53,9 @@ import coil3.gif.AnimatedImageDecoder
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import coil3.request.CachePolicy
+import com.yandex.authsdk.YandexAuthLoginOptions
+import com.yandex.authsdk.YandexAuthOptions
+import com.yandex.authsdk.YandexAuthSdk
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -86,8 +89,19 @@ private enum class Destination(val title: String, val icon: ImageVector) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GalleryApp(model: GalleryModel = viewModel()) {
+private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexCloudModel = viewModel()) {
     val state by model.state.collectAsStateWithLifecycle()
+    val yandex by cloudModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val authSdk = remember { YandexAuthSdk.create(YandexAuthOptions(context)) }
+    val yandexLogin = rememberLauncherForActivityResult(authSdk.contract) { result ->
+        YandexAuthResultBridge.deliver(result, cloudModel)
+    }
+    fun signInYandex() {
+        if (!cloudModel.beginLogin()) return
+        model.chooseCloud("Яндекс Диск")
+        try { yandexLogin.launch(YandexAuthLoginOptions()) } catch (e: Exception) { cloudModel.loginFailed() }
+    }
     var destination by rememberSaveable { mutableStateOf(Destination.PHOTOS) }
     var folder by rememberSaveable { mutableStateOf<String?>(null) }
     var albumFilter by rememberSaveable { mutableStateOf<String?>(null) }
@@ -124,6 +138,8 @@ private fun GalleryApp(model: GalleryModel = viewModel()) {
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it, duration = SnackbarDuration.Long); model.message(null) }
     }
+    LaunchedEffect(yandex.message) { yandex.message?.let { model.message(it); cloudModel.clearMessage() } }
+    LaunchedEffect(yandex.account?.uid) { if (yandex.account != null && state.cloud?.provider != "Яндекс Диск") model.chooseCloud("Яндекс Диск") }
     val filtered = remember(state.media, state.favorites, state.albums, folder, albumFilter, favoriteFilter) {
         state.media.filter { item -> (folder == null || item.folder == folder) && (!favoriteFilter || item.uri.toString() in state.favorites) &&
             (albumFilter == null || item.uri.toString() in (state.albums.firstOrNull { it.name == albumFilter }?.members ?: emptySet())) }
@@ -145,7 +161,7 @@ private fun GalleryApp(model: GalleryModel = viewModel()) {
                         Destination.ALBUMS -> "Ваши коллекции"; Destination.CLOUD -> "Облачное хранилище"; Destination.SETTINGS -> "Настройки" },
                         style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Medium)
                 }
-                IconButton(onClick = { if (destination == Destination.ALBUMS) addAlbum = true else model.refresh() }, modifier = Modifier.background(Mist, CircleShape)) {
+                IconButton(onClick = { when (destination) { Destination.ALBUMS -> addAlbum = true; Destination.CLOUD -> cloudModel.recheck(); else -> model.refresh() } }, modifier = Modifier.background(Mist, CircleShape)) {
                     Icon(if (destination == Destination.ALBUMS) Icons.Outlined.Add else Icons.Outlined.Refresh, "Обновить или создать альбом")
                 }
             }
@@ -172,18 +188,23 @@ private fun GalleryApp(model: GalleryModel = viewModel()) {
                     if (state.hasMore) item { OutlinedButton(onClick = { model.more() }) { Text("Загрузить следующие файлы") } }
                 }
                 Destination.CLOUD -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    item { InfoCard(state.cloud?.provider ?: "Одно облако. Две зоны.", if (state.cloud == null) "Выберите Google Drive или Яндекс Диск. Сначала — проверенный холодный архив, затем — рабочая копия галереи." else "Выбор сохранён. Аккаунт ещё не подключён: интеграция с облаком в разработке.", Icons.Outlined.CloudQueue, if (state.cloud == null) "Выбрать облако" else "Изменить выбор", { providerDialog = true }) }
+                    if (state.cloud?.provider != "Google Drive" || yandex.account != null) item {
+                        YandexAccountCard(yandex, { signInYandex() }, { cloudModel.recheck() }, { cloudModel.disconnect() })
+                    } else item { InfoCard("Google Drive", "Подключение Google Drive появится позже. Сейчас доступен вход через Яндекс Диск.", Icons.Outlined.CloudQueue, "Выбрать Яндекс Диск", { model.chooseCloud("Яндекс Диск") }) }
+                    if (yandex.account == null && !yandex.busy && yandex.connection != YandexConnection.STORAGE_ERROR) item {
+                        InfoCard("Одно облако. Две зоны.", "Сначала — проверенный холодный архив, затем — рабочая копия галереи. Политика сохраняется при выборе облака.", Icons.Outlined.CloudQueue, "Выбрать облако", { providerDialog = true })
+                    }
                     item { ZoneCard("01", "Холодный архив", "Точные исходные файлы. Отдельный жизненный цикл, восстановление без личного ключа.", Icons.Outlined.Inventory2) }
                     item { ZoneCard("02", "Рабочая галерея", "Своя копия оригиналов, миниатюры и подгрузка при открытии. Создаётся после проверки архива.", Icons.Outlined.PhotoLibrary) }
                     item { InfoCard("Освобождение места — отдельное действие", "Загрузка не удаляет оригиналы с телефона. Удаление будет доступно после проверки копий и подтверждения Android.", Icons.Outlined.VerifiedUser) }
-                    item { InfoCard("Файлы вне галереи", "Скрытые снимки и архив будут доступны здесь. Облачный список появится после подключения аккаунта.", Icons.Outlined.FolderOpen) }
+                    item { InfoCard("Следующий этап — холодный архив", "Вход проверяет аккаунт и доступ к папке приложения. Загрузка файлов и облачный список будут доступны после проверки окончательного формата архива.", Icons.Outlined.FolderOpen) }
                 }
                 Destination.SETTINGS -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     item { InfoCard("Восстановление без личного ключа", "Оригиналы хранятся в обратимом контейнере. Облако технически может прочитать их, включая встроенные GPS и EXIF. Это выбранная политика восстановления.", Icons.Outlined.Key) }
                     item { InfoCard("Проверка переносимого файла", "Экспериментальный POS v1: копирование любых байтов, SHA-256 и полное повторное чтение. Исходный файл не удаляется.", Icons.Outlined.FactCheck, "Открыть инструменты", { archiveInfo = true }) }
                     item { InfoCard("Корзина на 60 дней", "Будущая корзина галереи сохранит область удаления. Холодный архив удаляется только отдельным выбором. Последняя копия не исчезает по таймеру без разрешения.", Icons.Outlined.DeleteOutline) }
                     item { InfoCard("Доступ к медиатеке", "Можно открыть все фото или только выбранные. Папки и альбомы доступны на вкладке «Альбомы».", Icons.Outlined.PermMedia, "Изменить доступ", { requestMedia() }) }
-                    item { Text("Небесная витрина · 0.1.0\nПервый этап разработки", Modifier.padding(24.dp), style = MaterialTheme.typography.bodySmall, color = Accent) }
+                    item { Text("Небесная витрина · ${BuildConfig.VERSION_NAME}\nВход через Яндекс Диск", Modifier.padding(24.dp), style = MaterialTheme.typography.bodySmall, color = Accent) }
                 }
             }
         }
@@ -201,7 +222,7 @@ private fun GalleryApp(model: GalleryModel = viewModel()) {
     }
     if (providerDialog) AlertDialog(onDismissRequest = { providerDialog = false }, title = { Text("Сначала холодный архив") }, text = {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Выбор сохраняется один раз. Любая рабочая облачная копия будет ждать полной проверки архива этого снимка. Аккаунт подключим на следующем этапе.")
+            Text("Выбор сохраняется один раз. Рабочая облачная копия будет ждать полной проверки архива этого снимка. Сейчас можно подключить Яндекс Диск; Google Drive появится позже.")
             listOf("Яндекс Диск", "Google Drive").forEach { provider -> OutlinedButton(onClick = { model.chooseCloud(provider); providerDialog = false }, modifier = Modifier.fillMaxWidth()) { Text(provider) } }
         }
     }, confirmButton = {}, dismissButton = { TextButton(onClick = { providerDialog = false }) { Text("Позже") } })
@@ -210,6 +231,38 @@ private fun GalleryApp(model: GalleryModel = viewModel()) {
     }, confirmButton = { TextButton(onClick = { archiveInfo = false; restore = false; openFile.launch(arrayOf("*/*")) }) { Text("Создать") } },
         dismissButton = { TextButton(onClick = { archiveInfo = false; restore = true; openFile.launch(arrayOf("*/*")) }) { Text("Восстановить") } })
     if (state.fileOperationRunning) AlertDialog(onDismissRequest = {}, title = { Text("Запись и проверка файла") }, text = { Column(verticalArrangement = Arrangement.spacedBy(16.dp)) { LinearProgressIndicator(Modifier.fillMaxWidth()); Text("Идёт полное чтение. Исходный файл остаётся на месте.") } }, confirmButton = {})
+}
+
+@Composable
+private fun YandexAccountCard(state: YandexCloudState, signIn: () -> Unit, recheck: () -> Unit, disconnect: () -> Unit) {
+    val account = state.account
+    val status = when (state.connection) {
+        YandexConnection.RESTORING -> "Восстанавливаем подключение…"
+        YandexConnection.SIGNING_IN -> "Вход через Яндекс…"
+        YandexConnection.CHECKING -> "Проверяем подключение…"
+        YandexConnection.CONNECTED -> "Яндекс Диск подключён"
+        YandexConnection.DISCONNECTED -> "Подключить Яндекс Диск"
+        YandexConnection.UNAVAILABLE -> "Подключение не подтверждено"
+        YandexConnection.REAUTH_REQUIRED -> "Нужно повторить вход"
+        YandexConnection.STORAGE_ERROR -> "Сохранённый вход недоступен"
+    }
+    Surface(Modifier.padding(horizontal = 24.dp).fillMaxWidth(), shape = RoundedCornerShape(24.dp), color = Mist.copy(alpha = .55f)) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Icon(Icons.Outlined.CloudQueue, null, tint = Accent)
+            Text(status, style = MaterialTheme.typography.titleMedium)
+            if (account != null) Text(account.label, style = MaterialTheme.typography.bodyLarge)
+            if (state.connection == YandexConnection.CONNECTED && account?.totalBytes != null && account.usedBytes != null) {
+                Text("${"%.1f".format(account.usedBytes / 1073741824.0)} из ${"%.1f".format(account.totalBytes / 1073741824.0)} ГБ занято на Диске", style = MaterialTheme.typography.bodyMedium)
+                Text("Доступ к папке приложения проверен. Загрузка фотографий появится на следующем этапе.", style = MaterialTheme.typography.bodyMedium)
+            } else Text(if (account == null) "Войдите в свой аккаунт. Подключение сохранится на этом устройстве." else "Сохранённый аккаунт остаётся выбранным. Проверка не меняет облачные файлы.", style = MaterialTheme.typography.bodyMedium)
+            if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            else {
+                if (state.connection != YandexConnection.STORAGE_ERROR && state.connection != YandexConnection.CONNECTED) Button(onClick = signIn) { Text("Войти через Яндекс") }
+                if (account != null && state.connection != YandexConnection.STORAGE_ERROR) TextButton(onClick = recheck) { Text("Проверить подключение") }
+                if (account != null || state.connection == YandexConnection.STORAGE_ERROR) TextButton(onClick = disconnect) { Text("Отключить на этом устройстве") }
+            }
+        }
+    }
 }
 
 @Composable
