@@ -2,16 +2,16 @@
 
 Android gallery with exact-byte originals, archive-first cloud workflow and explicitly scoped deletion. One connected provider at a time; Yandex Disk is the first integration, Google Drive follows.
 
-## Current milestone: 0.1.2
+## Current milestone: 0.1.3
 
 - Native Compose gallery: real MediaStore images/videos, paginated recent additions, device folders, local albums, favorites, photo/GIF viewer and Media3 video playback.
 - Full/selected/mixed media access is visible. A revoked grant is never treated as deletion.
 - CVPOS2 creation and recovery through Android's document picker, with legacy POS v1 import. Exact bytes, standard AES-256-GCM, public recovery key and full non-executable recovery recipe inside the file. Both operations reread the destination. The source is never removed.
 - Conservative JVM safety prototype: complete compound resource sets, bound proof persistence, separate physical copies, transactional reservations, atomic terminal state/outbox and 60-day Trash preflight.
 - Yandex LoginSDK with the registered public Client ID, device-local AES-GCM/Android Keystore session storage and read-only identity/Disk/app-folder checks. A saved account cannot be silently rebound. A successful real-account sign-in is still pending device validation.
-- Selected-file cold archive queue: encrypted atomic Android journal, persistent WorkManager tasks, stable account/root binding, owned staging and upload without overwrite. Full cloud recovery readback compares original and container SHA-256, length, bundle identity and stable observed object identity/version. An uncertain upload is reconciled by reading, never a blind repeated PUT.
+- Offline archive-all inventory: encrypted Android SQLite payloads, transactional scan pages/cursors, source epochs/generations and exact source rereads; persistent bounded upload queue, pause/resume, account/root binding and upload without overwrite. Full cloud recovery readback compares original and container SHA-256, length, bundle identity and stable observed object identity/version. An uncertain upload is reconciled by reading, never a blind repeated PUT.
 
-The selected-file prototype has a **128 MiB per-file limit**, up to three pending jobs, and requires an unmetered network and a non-null stable app-folder ID. Real-account Yandex upload/recovery validation is still pending. Archive-all, multipart, Live Photo grouping, Gallery Store, cloud-only viewing, automatic cleanup and destructive actions are not available. JDBC stores are JVM safety prototypes; the Android archive journal does not authorize deleting originals. Public recovery keys deliberately permit the provider to read originals. CI APKs use a different debug certificate; use the local 0.1.2 APK for the currently registered OAuth fingerprint.
+The upload prototype has a **128 MiB per-resource limit** and requires an unmetered network and a stable app-folder ID. Larger files appear explicitly as unsupported in the inventory. Manual complete resource sets can create physically separate Gallery Store containers after fresh readback of every cold member. Real-account Yandex validation is pending. Multipart, automatic Live Photo pairing, cloud thumbnails/viewing, self-repair, automatic cleanup and destructive actions are not available. JDBC stores remain JVM safety prototypes; Android archive rows do not authorize deleting originals. Public recovery keys deliberately permit the provider to read originals. Use the local 0.1.3 APK for the registered OAuth certificate; CI uses a different certificate.
 
 ## Design
 
@@ -20,6 +20,7 @@ The selected-file prototype has a **128 MiB per-file limit**, up to three pendin
 - [Milestone validation](docs/VALIDATION_0_1_RU.md)
 - [Yandex sign-in milestone validation](docs/VALIDATION_0_1_1_RU.md)
 - [Archive milestone validation](docs/VALIDATION_0_1_2_RU.md)
+- [Mass queue and working originals validation](docs/VALIDATION_0_1_3_RU.md)
 - [CVPOS2 format and recovery](docs/CVPOS2_SPEC.md)
 - [v26 audit](gallery_architecture_v26_audit_ru.md)
 - [v29 working specification](docs/SPEC_V29.md)

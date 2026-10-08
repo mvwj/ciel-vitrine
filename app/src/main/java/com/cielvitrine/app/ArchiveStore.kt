@@ -15,7 +15,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Private journal separate from public original containers. Never stored in WorkManager input data. */
-internal class ArchiveStore(context: Context, internal val directory: File = File(context.noBackupFilesDir, "cold-jobs"),
+internal class LegacyArchiveStore(context: Context, internal val directory: File = File(context.noBackupFilesDir, "cold-jobs"),
     private val keyAlias: String = "ciel.cold.journal.v2") : ArchiveJournal {
     private val aadPrefix = "${context.packageName}:cold-journal-v2:"
     private fun file(id: String): File {
