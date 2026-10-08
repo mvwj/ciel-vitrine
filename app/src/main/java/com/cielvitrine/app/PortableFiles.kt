@@ -1,31 +1,45 @@
 package com.cielvitrine.app
 
 import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import com.cielvitrine.pos.PosReader
 import com.cielvitrine.pos.Pos2
 import android.provider.OpenableColumns
 import java.io.OutputStream
+import java.io.InputStream
+import java.io.FileInputStream
 
 /** A user-selected file copy. Never authorizes deleting a MediaStore original. */
 object PortableFiles {
-    fun packAndReadBack(resolver: ContentResolver, source: Uri, destination: Uri): String {
-        ensureDistinct(resolver, source, destination)
+    fun packAndReadBack(context: Context, source: Uri, destination: Uri): String =
+        packAndReadBack(context.contentResolver, source, destination) { MediaInventory(context).openOriginal(source) }
+
+    /** The opener defines the selected representation. App callers use the Context overload for actual originals. */
+    fun packAndReadBack(resolver: ContentResolver, source: Uri, destination: Uri,
+        openSource: () -> InputStream = { resolver.openInputStream(source) ?: error("Source unavailable") }): String = openSource().use { sourceInput ->
+        // Outside cleanup: an alias rejection must never delete the source through its destination URI.
+        ensureDistinct(resolver, source, destination, sourceInput)
         try {
             val name = resolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
                 if (c.moveToFirst()) c.getString(0) else null
             } ?: "original.bin"
-            val written = resolver.openInputStream(source)!!.use { input ->
-                resolver.openOutputStream(destination, "wt")!!.use { output ->
-                    Pos2.write(input, output, name, resolver.getType(source) ?: "application/octet-stream")
-                }
+            val written = resolver.openOutputStream(destination, "wt")!!.use { output ->
+                Pos2.write(sourceInput, output, name, resolver.getType(source) ?: "application/octet-stream")
             }
+            val digest = java.security.MessageDigest.getInstance("SHA-256"); var bytes = 0L
+            openSource().use { again -> val buffer = ByteArray(65536)
+                while (true) { val n = again.read(buffer); if (n < 0) break; require(n > 0)
+                    bytes += n; require(bytes <= written.originalBytes); digest.update(buffer, 0, n) }
+            }
+            val hash = digest.digest().joinToString("") { "%02x".format(it) }
+            check(bytes == written.originalBytes && hash == written.originalSha256) { "Исходный файл изменился во время экспорта" }
             val recovered = resolver.openInputStream(destination)!!.use { input -> Pos2.read(input, Sink, written.originalBytes, written.originalSha256) }
             check(written.containerSha256 == recovered.containerSha256) { "Повторное чтение не совпало с источником" }
-            return "Архив прочитан обратно: ${recovered.originalBytes} байт. SHA-256 совпал. Исходный файл сохранён."
+            "Архив прочитан обратно: ${recovered.originalBytes} байт. SHA-256 совпал. Исходный файл сохранён."
         } catch (e: Exception) {
-            runCatching { DocumentsContract.deleteDocument(resolver, destination) }
+            runCatching { ensureDistinct(resolver, source, destination, sourceInput); DocumentsContract.deleteDocument(resolver, destination) }
             throw e
         }
     }
@@ -50,6 +64,7 @@ object PortableFiles {
                 while (true) {
                     val n = input.read(buffer)
                     if (n < 0) break
+                    require(n > 0)
                     digest.update(buffer, 0, n)
                     length += n
                 }
@@ -68,7 +83,7 @@ object PortableFiles {
         override fun write(b: ByteArray, off: Int, len: Int) {}
     }
 
-    private fun ensureDistinct(resolver: ContentResolver, source: Uri, destination: Uri) {
+    private fun ensureDistinct(resolver: ContentResolver, source: Uri, destination: Uri, sourceInput: InputStream? = null) {
         require(source != destination) { "Источник и назначение должны отличаться" }
         val sourceCanonical = resolver.canonicalize(source) ?: source
         val destinationCanonical = resolver.canonicalize(destination) ?: destination
@@ -77,13 +92,18 @@ object PortableFiles {
         val destinationId = runCatching { DocumentsContract.getDocumentId(destination) }.getOrNull()
         require(source.authority != destination.authority || sourceId == null || sourceId != destinationId) { "Нельзя перезаписать исходный документ" }
         // Detect tree/document aliases and regular-file aliases before opening with truncate.
-        resolver.openFileDescriptor(source, "r")!!.use { src ->
-            resolver.openFileDescriptor(destination, "r")!!.use { dst ->
-                val a = android.system.Os.fstat(src.fileDescriptor)
-                val b = android.system.Os.fstat(dst.fileDescriptor)
-                if (android.system.OsConstants.S_ISREG(a.st_mode) && android.system.OsConstants.S_ISREG(b.st_mode)) {
-                    require(a.st_dev != b.st_dev || a.st_ino != b.st_ino) { "Источник и назначение — один файл" }
-                }
+        // The exact source FD matters: the default descriptor may use a redaction/transcoding cache.
+        val exactDescriptor = when (sourceInput) {
+            is OriginalInputStream -> sourceInput.sourceDescriptor
+            is FileInputStream -> sourceInput.fd
+            else -> null
+        }
+        val a = exactDescriptor?.let { android.system.Os.fstat(it) }
+            ?: resolver.openFileDescriptor(source, "r")!!.use { android.system.Os.fstat(it.fileDescriptor) }
+        resolver.openFileDescriptor(destination, "r")!!.use { dst ->
+            val b = android.system.Os.fstat(dst.fileDescriptor)
+            if (android.system.OsConstants.S_ISREG(a.st_mode) && android.system.OsConstants.S_ISREG(b.st_mode)) {
+                require(a.st_dev != b.st_dev || a.st_ino != b.st_ino) { "Источник и назначение — один файл" }
             }
         }
     }

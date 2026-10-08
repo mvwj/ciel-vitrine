@@ -94,7 +94,7 @@ internal class AndroidArchiveStaging(private val context: Context, private val s
                 inventory.requireUnchanged(job)
                 val digest = MessageDigest.getInstance("SHA-256"); var bytes = 0L
                 inventory.openOriginal(job).use { source -> val input = stopAware(source); val buffer = ByteArray(65536)
-                    while (true) { val n = input.read(buffer); if (n < 0) break; if (n == 0) continue
+                    while (true) { val n = input.read(buffer); if (n < 0) break; require(n > 0)
                         bytes += n; require(bytes <= ColdArchive.MAX_BYTES); digest.update(buffer, 0, n) }
                 }
                 inventory.requireUnchanged(job)
@@ -107,7 +107,7 @@ internal class AndroidArchiveStaging(private val context: Context, private val s
                 require(before.id == cold.remoteId && before.modified == cold.remoteModified && before.bytes == expected.containerBytes)
                 provider.readback(cold.path) { source -> FileOutputStream(download).use { output ->
                     val input = stopAware(source); val buffer = ByteArray(65536); var bytes = 0L
-                    while (true) { val n = input.read(buffer); if (n < 0) break; if (n == 0) continue
+                    while (true) { val n = input.read(buffer); if (n < 0) break; require(n > 0)
                         bytes += n; require(bytes <= expected.containerBytes); output.write(buffer, 0, n) }
                     require(bytes == expected.containerBytes); output.fd.sync()
                 } }

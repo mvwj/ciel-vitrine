@@ -49,6 +49,23 @@ class PortableFilesAndroidTest {
         catch (_: IllegalArgumentException) {}
         assertArrayEquals(original, bytes(source))
     }
+    @Test fun sameSizeChangeDuringExportCannotProduceSuccess() {
+        val original = ByteArray(65537) { (it * 17).toByte() }
+        val source = document(original)
+        val destination = document()
+        val changed = original.copyOf().apply { this[lastIndex] = (this[lastIndex].toInt() xor 1).toByte() }
+        var reads = 0
+        try {
+            PortableFiles.packAndReadBack(resolver, source, destination) {
+                if (reads++ == 0) resolver.openInputStream(source)!! else changed.inputStream()
+            }
+            fail("Changed source accepted")
+        } catch (e: IllegalStateException) {
+            assertTrue(e.message!!.contains("Исходный файл изменился"))
+        }
+        assertEquals(2, reads)
+        assertArrayEquals(original, bytes(source))
+    }
     @Test fun corruptFooterCannotProduceSuccessAndSourceSurvives() {
         val source = document("Exact sample".toByteArray())
         val container = document()

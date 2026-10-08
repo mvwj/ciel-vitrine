@@ -56,6 +56,16 @@ class MediaInventoryAndroidTest {
             assertNull(original.uid); assertNull(original.rootId)
             assertFalse(jobs.any { it.sourceStamp!!.mediaId == android.content.ContentUris.parseId(later) && it.sourceStamp!!.volume == MediaStore.VOLUME_EXTERNAL_PRIMARY })
             inventory.openOriginal(original).use { assertArrayEquals(bytes, it.readBytes()) }
+            val container = resolver.insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, "ciel-export-${UUID.randomUUID()}.cv2")
+                put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/CielVitrineTests")
+            })!!; created += container
+            // Materialize the empty destination, as the document picker does before export.
+            resolver.openOutputStream(container, "w")!!.use { }
+            PortableFiles.packAndReadBack(context, first, container)
+            val exported = ByteArrayOutputStream(); resolver.openInputStream(container)!!.use { Pos2.read(it, exported) }
+            assertArrayEquals(bytes, exported.toByteArray())
             val staging = AndroidArchiveStaging(context); val proof = staging.prepare(original)
             val restored = ByteArrayOutputStream(); staging.open(id).use { Pos2.read(it, restored, proof.originalBytes, proof.originalSha256) }
             assertArrayEquals(bytes, restored.toByteArray())

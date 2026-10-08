@@ -13,6 +13,13 @@ import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import com.cielvitrine.archive.*
 import java.io.InputStream
+import java.io.FilterInputStream
+import android.content.res.AssetFileDescriptor
+
+/** Keep the exact descriptor while honoring the asset's offset/length and close ownership. */
+internal class OriginalInputStream(private val asset: AssetFileDescriptor) : FilterInputStream(asset.createInputStream()) {
+    val sourceDescriptor get() = asset.fileDescriptor
+}
 
 /** Inventory is a resumable list of visible resources, never evidence that an absent file was deleted. */
 internal class MediaInventory(private val context: Context) {
@@ -91,17 +98,20 @@ internal class MediaInventory(private val context: Context) {
             require(c.moveToFirst() && stamp(c, expected.volume, expected.epoch) == expected)
         } ?: error("Source unavailable")
     }
-    fun openOriginal(job: ArchiveJob): InputStream {
-        var uri = Uri.parse(job.source)
+    fun openOriginal(job: ArchiveJob): InputStream = openOriginal(Uri.parse(job.source))
+    fun openOriginal(source: Uri): InputStream {
+        var uri = source
         // SAF MediaDocuments may still map to a MediaStore object; generic document providers supply their selected bytes.
         val media = if (uri.authority == MediaStore.AUTHORITY) uri else runCatching { MediaStore.getMediaUri(context, uri) }.getOrNull()
         if (media == null) return resolver.openInputStream(uri) ?: error("Source unavailable")
         uri = MediaStore.setRequireOriginal(media)
-        if (Build.VERSION.SDK_INT < 31) return resolver.openInputStream(uri) ?: error("Original unavailable")
-        val options = Bundle().apply { putBoolean(MediaStore.EXTRA_ACCEPT_ORIGINAL_MEDIA_FORMAT, true) }
-        val descriptor = resolver.openTypedAssetFileDescriptor(uri, "*/*", options) ?: error("Original unavailable")
+        val descriptor = if (Build.VERSION.SDK_INT < 31) resolver.openAssetFileDescriptor(uri, "r")
+            else resolver.openTypedAssetFileDescriptor(uri, "*/*", Bundle().apply {
+                putBoolean(MediaStore.EXTRA_ACCEPT_ORIGINAL_MEDIA_FORMAT, true)
+            })
+        requireNotNull(descriptor) { "Original unavailable" }
         try {
-            return descriptor.createInputStream()
+            return OriginalInputStream(descriptor)
         } catch (e: Exception) { descriptor.close(); throw e }
     }
 }

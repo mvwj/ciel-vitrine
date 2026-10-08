@@ -146,7 +146,7 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
                 val result = withContext(Dispatchers.IO) {
                     val resolver = getApplication<Application>().contentResolver
                     if (restore) PortableFiles.restoreAndReadBack(resolver, source, destination)
-                    else PortableFiles.packAndReadBack(resolver, source, destination)
+                    else PortableFiles.packAndReadBack(getApplication<Application>(), source, destination)
                 }
                 message(result)
             } catch (e: Exception) { message("Операция не подтверждена: ${e.localizedMessage}") }
