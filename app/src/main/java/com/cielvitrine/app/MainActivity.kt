@@ -89,9 +89,10 @@ private enum class Destination(val title: String, val icon: ImageVector) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexCloudModel = viewModel()) {
+private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexCloudModel = viewModel(), archiveModel: ArchiveModel = viewModel()) {
     val state by model.state.collectAsStateWithLifecycle()
     val yandex by cloudModel.state.collectAsStateWithLifecycle()
+    val archive by archiveModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val authSdk = remember { YandexAuthSdk.create(YandexAuthOptions(context)) }
     val yandexLogin = rememberLauncherForActivityResult(authSdk.contract) { result ->
@@ -110,6 +111,8 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     var addAlbum by remember { mutableStateOf(false) }
     var providerDialog by remember { mutableStateOf(false) }
     var archiveInfo by remember { mutableStateOf(false) }
+    var coldInfo by remember { mutableStateOf(false) }
+    val selectColdFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) archiveModel.add(uri) }
     var pendingSource by rememberSaveable { mutableStateOf<String?>(null) }
     var restore by rememberSaveable { mutableStateOf(false) }
     val createFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
@@ -120,7 +123,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     val openFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             pendingSource = uri.toString()
-            createFile.launch(if (restore) "restored-original.bin" else "original.pos")
+            createFile.launch(if (restore) "restored-original.bin" else "original.cv2")
         }
     }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { model.refresh() }
@@ -138,6 +141,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it, duration = SnackbarDuration.Long); model.message(null) }
     }
+    LaunchedEffect(archive.message) { archive.message?.let { snackbar.showSnackbar(it, duration = SnackbarDuration.Long); archiveModel.clearMessage() } }
     LaunchedEffect(yandex.message) { yandex.message?.let { model.message(it); cloudModel.clearMessage() } }
     LaunchedEffect(yandex.account?.uid) { if (yandex.account != null && state.cloud?.provider != "Яндекс Диск") model.chooseCloud("Яндекс Диск") }
     val filtered = remember(state.media, state.favorites, state.albums, folder, albumFilter, favoriteFilter) {
@@ -197,11 +201,31 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                     item { ZoneCard("01", "Холодный архив", "Точные исходные файлы. Отдельный жизненный цикл, восстановление без личного ключа.", Icons.Outlined.Inventory2) }
                     item { ZoneCard("02", "Рабочая галерея", "Своя копия оригиналов, миниатюры и подгрузка при открытии. Создаётся после проверки архива.", Icons.Outlined.PhotoLibrary) }
                     item { InfoCard("Освобождение места — отдельное действие", "Загрузка не удаляет оригиналы с телефона. Удаление будет доступно после проверки копий и подтверждения Android.", Icons.Outlined.VerifiedUser) }
-                    item { InfoCard("Следующий этап — холодный архив", "Вход проверяет аккаунт и доступ к папке приложения. Загрузка файлов и облачный список будут доступны после проверки окончательного формата архива.", Icons.Outlined.FolderOpen) }
+                    item { InfoCard("Сохранить файл в холодный архив", "Выбранный файл до 128 МиБ будет упакован без пересжатия, загружен и полностью прочитан обратно в сети без тарификации. Исходник остаётся на телефоне.", Icons.Outlined.FolderOpen,
+                        if (yandex.connection == YandexConnection.CONNECTED && !archive.busy) "Выбрать файл" else null,
+                        { coldInfo = true }) }
+                    archive.jobs.forEach { job -> item(key = job.id) {
+                        Card(Modifier.fillMaxWidth().padding(horizontal = 24.dp), colors = CardDefaults.cardColors(containerColor = Mist)) {
+                            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(job.name, fontWeight = FontWeight.Medium)
+                                Text(when (job.phase) {
+                                    com.cielvitrine.archive.ArchivePhase.QUEUED -> "В очереди: ожидает сети без тарификации и доступного аккаунта"
+                                    com.cielvitrine.archive.ArchivePhase.PREPARED -> "Контейнер проверен на телефоне. Ожидает загрузки"
+                                    com.cielvitrine.archive.ArchivePhase.UPLOAD_UNCERTAIN -> "Загрузка отправлена или могла начаться. Ожидает полного обратного чтения"
+                                    com.cielvitrine.archive.ArchivePhase.VERIFIED -> "Холодная копия прочитана полностью. SHA-256 и длина совпали"
+                                    com.cielvitrine.archive.ArchivePhase.SOURCE_ERROR -> "Исходный файл недоступен"
+                                }, style = MaterialTheme.typography.bodyMedium)
+                                Text("Аккаунт Яндекса: ${job.uid} · исходник сохранён", style = MaterialTheme.typography.bodySmall)
+                                job.verifiedAt?.let { Text("Проверено ${dateLabel(it)}. Доступность облачной копии может измениться.", style = MaterialTheme.typography.bodySmall) }
+                                job.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                                if (job.phase != com.cielvitrine.archive.ArchivePhase.VERIFIED && job.uid == yandex.account?.uid) TextButton(onClick = { archiveModel.retry(job.id) }) { Text(if (job.phase == com.cielvitrine.archive.ArchivePhase.UPLOAD_UNCERTAIN) "Повторить проверку" else "Продолжить") }
+                            }
+                        }
+                    } }
                 }
                 Destination.SETTINGS -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     item { InfoCard("Восстановление без личного ключа", "Оригиналы хранятся в обратимом контейнере. Облако технически может прочитать их, включая встроенные GPS и EXIF. Это выбранная политика восстановления.", Icons.Outlined.Key) }
-                    item { InfoCard("Проверка переносимого файла", "Экспериментальный POS v1: копирование любых байтов, SHA-256 и полное повторное чтение. Исходный файл не удаляется.", Icons.Outlined.FactCheck, "Открыть инструменты", { archiveInfo = true }) }
+                    item { InfoCard("Переносимый оригинал CVPOS2", "AES-256-GCM с ключом восстановления внутри файла, SHA-256 и полное повторное чтение. Старые POS v1 тоже можно восстановить. Исходник не удаляется.", Icons.Outlined.FactCheck, "Открыть инструменты", { archiveInfo = true }) }
                     item { InfoCard("Корзина на 60 дней", "Будущая корзина галереи сохранит область удаления. Холодный архив удаляется только отдельным выбором. Последняя копия не исчезает по таймеру без разрешения.", Icons.Outlined.DeleteOutline) }
                     item { InfoCard("Доступ к медиатеке", "Можно открыть все фото или только выбранные. Папки и альбомы доступны на вкладке «Альбомы».", Icons.Outlined.PermMedia, "Изменить доступ", { requestMedia() }) }
                     item { Text("Небесная витрина · ${BuildConfig.VERSION_NAME}\nВход через Яндекс Диск", Modifier.padding(24.dp), style = MaterialTheme.typography.bodySmall, color = Accent) }
@@ -226,7 +250,11 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
             listOf("Яндекс Диск", "Google Drive").forEach { provider -> OutlinedButton(onClick = { model.chooseCloud(provider); providerDialog = false }, modifier = Modifier.fillMaxWidth()) { Text(provider) } }
         }
     }, confirmButton = {}, dismissButton = { TextButton(onClick = { providerDialog = false }) { Text("Позже") } })
-    if (archiveInfo) AlertDialog(onDismissRequest = { archiveInfo = false }, title = { Text("Проверить POS v1") }, text = {
+    if (coldInfo) AlertDialog(onDismissRequest = { coldInfo = false }, title = { Text("Сохранить холодную копию") }, text = {
+        Text("Будет создан отдельный контейнер на Яндекс Диске. Ключ и описание восстановления находятся внутри: облако технически может прочитать файл. На этом этапе выбирается один файл до 128 МиБ; пары Live Photo нужно сохранять по отдельности. Проверка потребует загрузить контейнер и скачать его полностью. Исходник сохранится.")
+    }, confirmButton = { TextButton(onClick = { coldInfo = false; selectColdFile.launch(arrayOf("*/*")) }) { Text("Выбрать файл") } },
+        dismissButton = { TextButton(onClick = { coldInfo = false }) { Text("Отмена") } })
+    if (archiveInfo) AlertDialog(onDismissRequest = { archiveInfo = false }, title = { Text("Переносимый оригинал") }, text = {
         Text("Выберите исходный файл, затем место для контейнера. Он не скрывает содержимое от владельца облака. После записи приложение прочитает контейнер обратно и сравнит байты. Восстановление тоже проверяет сохранённый результат.")
     }, confirmButton = { TextButton(onClick = { archiveInfo = false; restore = false; openFile.launch(arrayOf("*/*")) }) { Text("Создать") } },
         dismissButton = { TextButton(onClick = { archiveInfo = false; restore = true; openFile.launch(arrayOf("*/*")) }) { Text("Восстановить") } })

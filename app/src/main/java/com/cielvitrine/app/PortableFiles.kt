@@ -4,23 +4,26 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.DocumentsContract
 import com.cielvitrine.pos.PosReader
-import com.cielvitrine.pos.PosWriter
+import com.cielvitrine.pos.Pos2
+import android.provider.OpenableColumns
 import java.io.OutputStream
-import java.security.SecureRandom
 
 /** A user-selected file copy. Never authorizes deleting a MediaStore original. */
 object PortableFiles {
     fun packAndReadBack(resolver: ContentResolver, source: Uri, destination: Uri): String {
         ensureDistinct(resolver, source, destination)
         try {
+            val name = resolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            } ?: "original.bin"
             val written = resolver.openInputStream(source)!!.use { input ->
                 resolver.openOutputStream(destination, "wt")!!.use { output ->
-                    PosWriter.write(input, output, ByteArray(16).also { SecureRandom().nextBytes(it) })
+                    Pos2.write(input, output, name, resolver.getType(source) ?: "application/octet-stream")
                 }
             }
-            val recovered = resolver.openInputStream(destination)!!.use { input -> PosReader.read(input, Sink) }
-            check(written.partOriginalByteLength == recovered.recoveredByteLength && written.partOriginalSha256Hex == recovered.recoveredSha256Hex) { "Повторное чтение не совпало с источником" }
-            return "Архив прочитан обратно: ${recovered.recoveredByteLength} байт. SHA-256 совпал. Исходный файл сохранён."
+            val recovered = resolver.openInputStream(destination)!!.use { input -> Pos2.read(input, Sink, written.originalBytes, written.originalSha256) }
+            check(written.containerSha256 == recovered.containerSha256) { "Повторное чтение не совпало с источником" }
+            return "Архив прочитан обратно: ${recovered.originalBytes} байт. SHA-256 совпал. Исходный файл сохранён."
         } catch (e: Exception) {
             runCatching { DocumentsContract.deleteDocument(resolver, destination) }
             throw e
@@ -30,8 +33,15 @@ object PortableFiles {
     fun restoreAndReadBack(resolver: ContentResolver, source: Uri, destination: Uri): String {
         ensureDistinct(resolver, source, destination)
         try {
-            val decoded = resolver.openInputStream(source)!!.use { input ->
-                resolver.openOutputStream(destination, "wt")!!.use { output -> PosReader.read(input, output) }
+            val decoded = resolver.openInputStream(source)!!.buffered().use { input ->
+                input.mark(8)
+                val magic = ByteArray(8); var n = 0
+                while (n < 8) { val count = input.read(magic, n, 8 - n); if (count <= 0) break; n += count }
+                input.reset()
+                resolver.openOutputStream(destination, "wt")!!.use { output ->
+                    if (magic.contentEquals(Pos2.MAGIC)) Pos2.read(input, output).let { it.originalBytes to it.originalSha256 }
+                    else PosReader.read(input, output).let { it.recoveredByteLength to it.recoveredSha256Hex }
+                }
             }
             val digest = java.security.MessageDigest.getInstance("SHA-256")
             var length = 0L
@@ -45,7 +55,7 @@ object PortableFiles {
                 }
             }
             val hash = digest.digest().joinToString("") { "%02x".format(it) }
-            check(length == decoded.recoveredByteLength && hash == decoded.recoveredSha256Hex) { "Сохранённый файл отличается от архива" }
+            check(length == decoded.first && hash == decoded.second) { "Сохранённый файл отличается от архива" }
             return "Файл восстановлен и прочитан обратно. $length байт, SHA-256 совпал."
         } catch (e: Exception) {
             runCatching { DocumentsContract.deleteDocument(resolver, destination) }

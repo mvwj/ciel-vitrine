@@ -28,4 +28,5 @@ include(":saga-engine")
 include(":reader-share")
 include(":provider-adapter")
 include(":state-machine-tests")
+include(":archive-engine")
 

@@ -2,7 +2,8 @@ package com.cielvitrine.pos.refdecoder
 
 import java.io.File
 import java.io.FileInputStream
-import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
@@ -13,7 +14,7 @@ import java.util.zip.CRC32
  */
 fun main(args: Array<String>) {
     if (args.isEmpty()) {
-        println("Usage: StandaloneReferenceDecoder <input.pos> [output_file]")
+        println("Usage: StandaloneReferenceDecoder <input.cv2|input.pos> [NEW_output_file]")
         return
     }
 
@@ -21,7 +22,9 @@ fun main(args: Array<String>) {
     val outputFile = if (args.size > 1) File(args[1]) else null
 
     try {
-        val result = decodePos(inputFile, outputFile)
+        require(outputFile == null || !outputFile.exists()) { "Output already exists; choose a new path" }
+        val isV2 = inputFile.inputStream().use { it.readNBytes(8).contentEquals("CVPOS2\r\n".toByteArray()) }
+        val result = if (isV2) decodePos2(inputFile, outputFile) else decodePos(inputFile, outputFile)
         println("Decoded successfully: ${result.bytesRecovered} bytes, SHA-256=${result.sha256Hex}")
     } catch (e: Exception) {
         System.err.println("Decode failed: ${e.message}")
@@ -71,7 +74,7 @@ fun decodePos(inputFile: File, outputFile: File?): DecodeResult {
         require(descriptor.contentEquals("CIEL_VITRINE_POS_V1_STANDARD".toByteArray(Charsets.US_ASCII).copyOf(32)))
         require(headerBytes.sliceArray(96..127).all { it == 0.toByte() })
 
-        val outStream = outputFile?.let { FileOutputStream(it) }
+        val outStream = outputFile?.let { Files.newOutputStream(it.toPath(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE) }
         val digest = MessageDigest.getInstance("SHA-256")
         var recordCount = 0L
         var totalBytes = 0L

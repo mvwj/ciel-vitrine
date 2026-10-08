@@ -34,5 +34,6 @@ __pycache__/
 *.pyc
 artifacts/
 .kotlin/
+.venv/
 emulator-*.log
 

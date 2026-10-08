@@ -2,16 +2,16 @@
 
 Android gallery with exact-byte originals, archive-first cloud workflow and explicitly scoped deletion. One connected provider at a time; Yandex Disk is the first integration, Google Drive follows.
 
-## Current milestone: 0.1.1
+## Current milestone: 0.1.2
 
 - Native Compose gallery: real MediaStore images/videos, paginated recent additions, device folders, local albums, favorites, photo/GIF viewer and Media3 video playback.
 - Full/selected/mixed media access is visible. A revoked grant is never treated as deletion.
-- Experimental POS v1 creation and recovery through Android's document picker. Both operations reread the destination and compare SHA-256 and exact length. The source is never removed.
+- CVPOS2 creation and recovery through Android's document picker, with legacy POS v1 import. Exact bytes, standard AES-256-GCM, public recovery key and full non-executable recovery recipe inside the file. Both operations reread the destination. The source is never removed.
 - Conservative JVM safety prototype: complete compound resource sets, bound proof persistence, separate physical copies, transactional reservations, atomic terminal state/outbox and 60-day Trash preflight.
 - Yandex LoginSDK with the registered public Client ID, device-local AES-GCM/Android Keystore session storage and read-only identity/Disk/app-folder checks. A saved account cannot be silently rebound. A successful real-account sign-in is still pending device validation.
-- Initial Yandex REST client: metadata observation, upload without overwrite and streamed readback. Upload/readback queues are **not connected to Android UI yet**; persistent jobs and real-provider recovery probes are next.
+- Selected-file cold archive queue: encrypted atomic Android journal, persistent WorkManager tasks, stable account/root binding, owned staging and upload without overwrite. Full cloud recovery readback compares original and container SHA-256, length, bundle identity and stable observed object identity/version. An uncertain upload is reconciled by reading, never a blind repeated PUT.
 
-Cloud upload, cloud-only viewing, automatic cleanup and destructive actions are not available in this APK. JDBC stores are JVM prototypes; Android production storage needs its own implementation. POS v1 is a public reversible transform, **not confidential encryption**. Its header does not carry a complete decoding recipe; keep the offline recovery package below until this gap is closed. CI APKs use a different debug certificate; use the local 0.1.1 APK for the currently registered OAuth fingerprint.
+The selected-file prototype has a **128 MiB per-file limit**, up to three pending jobs, and requires an unmetered network and a non-null stable app-folder ID. Real-account Yandex upload/recovery validation is still pending. Archive-all, multipart, Live Photo grouping, Gallery Store, cloud-only viewing, automatic cleanup and destructive actions are not available. JDBC stores are JVM safety prototypes; the Android archive journal does not authorize deleting originals. Public recovery keys deliberately permit the provider to read originals. CI APKs use a different debug certificate; use the local 0.1.2 APK for the currently registered OAuth fingerprint.
 
 ## Design
 
@@ -19,6 +19,8 @@ Cloud upload, cloud-only viewing, automatic cleanup and destructive actions are 
 - [Yandex OAuth setup](docs/YANDEX_SETUP_RU.md)
 - [Milestone validation](docs/VALIDATION_0_1_RU.md)
 - [Yandex sign-in milestone validation](docs/VALIDATION_0_1_1_RU.md)
+- [Archive milestone validation](docs/VALIDATION_0_1_2_RU.md)
+- [CVPOS2 format and recovery](docs/CVPOS2_SPEC.md)
 - [v26 audit](gallery_architecture_v26_audit_ru.md)
 - [v29 working specification](docs/SPEC_V29.md)
 - [Experimental POS v1 byte layout](docs/POS_V1_SPEC.md)
@@ -33,9 +35,10 @@ JDK 17+, Android SDK 36 and Build Tools 36.0.0. Configure SDK in ignored `local.
 ```text
 ./gradlew test :app:assembleDebug :app:lintDebug
 python scripts/test_pos_fixtures.py
+python scripts/test_pos2_fixtures.py
 ```
 
-The Python check decodes actual Kotlin output and compares independent original files. If fixtures were removed while test results stayed cached, run `./gradlew :pos-format:test --rerun-tasks` first.
+Install `requirements-recovery.txt` into a Python environment first. Set `POS2_PYTHON` to that interpreter if it is not the default `python`; Windows helper also detects `.venv/Scripts/python.exe`. Tests encode with Kotlin and independent Python and verify both directions, including actual original fixtures. If fixtures were removed while test results stayed cached, run `./gradlew :pos-format:test --rerun-tasks` first.
 
 APK: `app/build/outputs/apk/debug/app-debug.apk`. Debug signing is for development only.
 
@@ -45,6 +48,7 @@ For Windows hosts affected by Java temporary socket path virtualization, use `./
 
 ```text
 python pos-reference-decoder/python/ciel_pos_decoder.py original.pos --output recovered-original.bin
+python pos-reference-decoder/python/ciel_pos2_decoder.py original.cv2 --output recovered-original.bin
 ```
 
-Recovery checks bounded framing, CRC, container digest, original SHA-256, complete footer and exact length. Public hashes establish internal consistency. Trusted identity requires comparison with the independently captured original passport. Keep POS, decoder and format specification together until the complete recipe is embedded in the next format.
+The independent JVM distribution (`./gradlew :pos-reference-decoder:installDist`) supports both formats using Java 17+. CVPOS2 recovery checks bounded framing, GCM tags, prefix/original hashes, the mandatory final record and EOF. Public keys and hashes establish internal consistency; trusted identity requires the independently captured original passport. CVPOS2 embeds the full recipe. Legacy POS v1 still needs its external specification and decoder.

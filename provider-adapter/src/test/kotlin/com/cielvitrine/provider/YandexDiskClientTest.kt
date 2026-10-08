@@ -1,6 +1,10 @@
 package com.cielvitrine.provider
 
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.Buffer
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -8,6 +12,48 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
 class YandexDiskClientTest {
+    @Test fun `signed transfer writes exact bytes and reads full body with download authorization`() {
+        val original = ByteArray(131079) { (it * 31).toByte() }
+        MockWebServer().use { server ->
+            val http = OkHttpClient.Builder().addInterceptor { chain ->
+                val request = chain.request()
+                if (request.url.host != "downloader.dst.yandex.ru") return@addInterceptor chain.proceed(request)
+                if (request.method == "PUT") {
+                    assertNull(request.header("Authorization"))
+                    assertTrue(request.body!!.isOneShot())
+                    assertEquals(original.size.toLong(), request.body!!.contentLength())
+                    val buffer = Buffer(); request.body!!.writeTo(buffer)
+                    assertArrayEquals(original, buffer.readByteArray())
+                    Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(201).message("Created").body(ByteArray(0).toResponseBody()).build()
+                } else {
+                    assertEquals("OAuth test-token", request.header("Authorization"))
+                    Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(200).message("OK").body(original.toResponseBody()).build()
+                }
+            }.build()
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), http)
+            server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/upload","method":"PUT","templated":false}"""))
+            assertTrue(client.uploadNew("app:/test.cv2", original.size.toLong()) { original.inputStream() }.accepted)
+            assertEquals("false", server.takeRequest().requestUrl!!.queryParameter("overwrite"))
+            server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/download","method":"GET","templated":false}"""))
+            assertArrayEquals(original, client.fullReadback("app:/test.cv2") { it.readBytes() })
+        }
+    }
+    @Test fun `folder conflict is accepted only for an observed directory`() {
+        MockWebServer().use { server ->
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient())
+            server.enqueue(MockResponse().setResponseCode(201))
+            client.ensureDirectory("app:/ciel-vitrine-v2")
+            val created = server.takeRequest()
+            assertEquals("PUT", created.method)
+            assertEquals("app:/ciel-vitrine-v2", created.requestUrl!!.queryParameter("path"))
+            server.enqueue(MockResponse().setResponseCode(409))
+            server.enqueue(MockResponse().setBody("""{"type":"file"}"""))
+            assertThrows(IllegalStateException::class.java) { client.ensureDirectory("app:/ciel-vitrine-v2") }
+            server.enqueue(MockResponse().setResponseCode(409))
+            server.enqueue(MockResponse().setBody("""{"type":"dir"}"""))
+            client.ensureDirectory("app:/ciel-vitrine-v2")
+        }
+    }
     @Test fun `connection requires client identity disk information and application folder`() {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"id":"123","client_id":"public-client","login":"test-user"}"""))

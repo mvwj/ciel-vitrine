@@ -18,6 +18,8 @@ jobs:
         with:
           python-version: '3.12'
       - uses: gradle/actions/setup-gradle@v4
+      - name: Independent AES recovery dependency
+        run: python -m pip install -r requirements-recovery.txt
       - uses: android-actions/setup-android@v4
         with:
           cmdline-tools-version: '12266719'
@@ -28,6 +30,8 @@ jobs:
         run: bash gradlew test :app:assembleDebug :app:lintDebug --console=plain
       - name: Independent offline original recovery
         run: python scripts/test_pos_fixtures.py
+      - name: Independent AES container recovery
+        run: python scripts/test_pos2_fixtures.py
       - uses: actions/upload-artifact@v4
         with:
           name: ciel-vitrine-debug

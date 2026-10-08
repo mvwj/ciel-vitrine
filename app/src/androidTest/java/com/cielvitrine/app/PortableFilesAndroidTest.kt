@@ -60,4 +60,21 @@ class PortableFilesAndroidTest {
         catch (_: IllegalStateException) {}
         assertArrayEquals("Exact sample".toByteArray(), bytes(source))
     }
+    @Test fun archiveStagingCommitsAndRereadsBeforeUploadAndKeepsSource() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val sourceBytes = ByteArray(65537) { (it * 43).toByte() }
+        val source = document(sourceBytes)
+        val id = UUID.randomUUID().toString().replace("-", "")
+        val staging = AndroidArchiveStaging(context)
+        val job = com.cielvitrine.archive.ArchiveJob(id, "123", "test-root", source.toString(), "test.heic", "image/heic", sourceBytes.size.toLong())
+        try {
+            val proof = staging.prepare(job)
+            val result = staging.open(id).use { com.cielvitrine.pos.Pos2.read(it, com.cielvitrine.archive.ColdArchive.Sink, proof.originalBytes, proof.originalSha256) }
+            assertEquals(proof, com.cielvitrine.archive.ArchiveProof.from(result))
+            assertArrayEquals(sourceBytes, bytes(source))
+            try { staging.prepare(job.copy(sourceBytes = sourceBytes.size.toLong() + 1)); fail("Changed source length accepted") }
+            catch (_: IllegalArgumentException) {}
+            assertArrayEquals(sourceBytes, bytes(source))
+        } finally { staging.removeOwnedContainer(id) }
+    }
 }

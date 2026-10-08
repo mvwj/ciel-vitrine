@@ -6,6 +6,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
@@ -19,7 +20,8 @@ class YandexDiskClient internal constructor(
 ) {
     constructor(token: () -> String) : this(token, "https://cloud-api.yandex.net/v1/disk/".toHttpUrl(),
         OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
-            .connectTimeout(20, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).writeTimeout(60, TimeUnit.SECONDS).build())
+            .connectTimeout(20, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).writeTimeout(60, TimeUnit.SECONDS)
+            .callTimeout(4, TimeUnit.MINUTES).build())
 
     data class Resource(
         val path: String, val objectId: String?, val byteLength: Long?, val sha256: String?, val modified: String?,
@@ -82,6 +84,19 @@ class YandexDiskClient internal constructor(
                 json["sha256"]?.jsonPrimitive?.contentOrNull?.takeIf { it.matches(Regex("[0-9a-fA-F]{64}")) },
                 json["modified"]?.jsonPrimitive?.contentOrNull)
             return Observation(ProviderObjectPresence.PRESENT, resource)
+        }
+    }
+
+    /** Additive directory creation. A 409 is accepted only after observing a directory. */
+    fun ensureDirectory(path: String) {
+        require(path.startsWith("app:/") && !path.contains(".."))
+        val request = apiRequest("resources", mapOf("path" to path)).newBuilder()
+            .put(ByteArray(0).toRequestBody()).build()
+        val code = http.newCall(request).execute().use { it.code }
+        if (code == 201) return
+        check(code == 409) { "Directory creation unavailable" }
+        http.newCall(apiRequest("resources", mapOf("path" to path, "fields" to "type"))).execute().use { response ->
+            check(response.code == 200 && boundedJson(response.body ?: error("Missing metadata"))["type"]?.jsonPrimitive?.content == "dir")
         }
     }
 
