@@ -150,7 +150,7 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         val payload = try { cipher.seal("group:${group.id}", bytes) } finally { bytes.fill(0) }
         db.insertOrThrow("groups_table", null, ContentValues().apply { put("id", group.id); put("payload", payload) })
         for ((i, cold) in members.withIndex()) putJob(ArchiveJob(galleryIds[i], cold.uid, cold.rootId, cold.source, cold.name, cold.mime,
-            cold.proof!!.originalBytes, zone = OriginalZone.GALLERY, groupId = group.id, coldId = cold.id, createdAt = System.currentTimeMillis()))
+            cold.proof!!.originalBytes, zone = OriginalZone.GALLERY, groupId = group.id, coldId = cold.id, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN))
         group
     }
     fun importLegacy(legacy: LegacyArchiveStore) { transaction {

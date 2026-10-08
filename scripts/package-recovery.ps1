@@ -15,8 +15,10 @@ The JVM decoder is ready to run with Java 17 or later. No Android application,
 account, personal key, network, Python or Gradle is needed for recovery.
 This package does not include a Java runtime; prepare one before going offline.
 
-Windows: jvm\bin\pos-reference-decoder.bat ORIGINAL.cv2 NEW-OUTPUT.bin
-Linux/macOS: bash jvm/bin/pos-reference-decoder ORIGINAL.cv2 NEW-OUTPUT.bin
+Windows: jvm\bin\pos-reference-decoder.bat ORIGINAL.bin NEW-OUTPUT.bin
+Linux/macOS: bash jvm/bin/pos-reference-decoder ORIGINAL.bin NEW-OUTPUT.bin
+
+The input can use .bin or .cv2: the format is identified from its contents.
 
 Choose a NEW output path. Existing files are not overwritten. The decoder checks
 GCM tags, sequence/offset, the mandatory footer, original/prefix hashes and EOF.
@@ -28,7 +30,7 @@ has the file, including the cloud provider, can recover its exact original bytes
 Internal consistency is not a trusted identity proof: compare SHA-256 and length
 with your independently kept original passport when identity matters.
 
-Optional independent Python reader: ciel_pos2_decoder.py ORIGINAL.cv2 --output
+Optional independent Python reader: ciel_pos2_decoder.py ORIGINAL.bin --output
 NEW-OUTPUT.bin. Install requirements-recovery.txt before going offline; Python
 dependencies are NOT bundled here. See CVPOS2_SPEC.md for the format.
 

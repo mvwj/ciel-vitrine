@@ -128,7 +128,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     val openFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             pendingSource = uri.toString()
-            createFile.launch(if (restore) "restored-original.bin" else "original.cv2")
+            createFile.launch(if (restore) "restored-original.bin" else "original.bin")
         }
     }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { model.refresh() }

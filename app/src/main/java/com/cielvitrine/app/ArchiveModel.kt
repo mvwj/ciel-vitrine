@@ -72,7 +72,7 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
         val tooLarge = (bytes ?: 0) > ColdArchive.MAX_BYTES
         store.save(ArchiveJob(ArchiveStore.randomId(), null, null, uri.toString(), name,
             (context.contentResolver.getType(uri) ?: "application/octet-stream").take(256), bytes,
-            if (tooLarge) ArchivePhase.UNSUPPORTED_SIZE else ArchivePhase.QUEUED, createdAt = System.currentTimeMillis(),
+            if (tooLarge) ArchivePhase.UNSUPPORTED_SIZE else ArchivePhase.QUEUED, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
             notice = if (tooLarge) "Файл учтён. Загрузка свыше 128 МиБ появится с поддержкой частей." else null))
     }
     fun prepareAll() = perform("Собираем все доступные фото и видео. Новые файлы после начала сканирования войдут в следующий запуск.") {

@@ -8,6 +8,7 @@ import java.io.OutputStream
 
 @Serializable enum class ArchivePhase { QUEUED, PREPARED, UPLOAD_UNCERTAIN, VERIFIED, SOURCE_ERROR, UNSUPPORTED_SIZE }
 @Serializable enum class OriginalZone { COLD, GALLERY }
+@Serializable enum class ContainerExtension(val suffix: String) { CV2(".cv2"), BIN(".bin") }
 @Serializable data class SourceStamp(val volume: String, val epoch: String, val mediaId: Long,
     val generation: Long?, val modifiedSeconds: Long, val bytes: Long?, val width: Int, val height: Int,
     val durationMillis: Long, val capturedAt: Long?)
@@ -21,8 +22,10 @@ import java.io.OutputStream
     val verifiedAt: Long? = null, val notice: String? = null,
     val revision: Long = 0, val batchId: String? = null, val sourceStamp: SourceStamp? = null,
     val zone: OriginalZone = OriginalZone.COLD, val groupId: String? = null, val coldId: String? = null,
-    val deferred: Boolean = false, val createdAt: Long = 0) {
-    val path get() = "app:/ciel-vitrine-v2/${if (zone == OriginalZone.COLD) "cold" else "gallery"}/$id.cv2"
+    val deferred: Boolean = false, val createdAt: Long = 0,
+    // Missing in older journals: keep their original path, including uncertain uploads.
+    val containerExtension: ContainerExtension = ContainerExtension.CV2) {
+    val path get() = "app:/ciel-vitrine-v2/${if (zone == OriginalZone.COLD) "cold" else "gallery"}/$id${containerExtension.suffix}"
     fun validate() {
         require(id.matches(Regex("[0-9a-f]{32}")) && ((uid == null && rootId == null) ||
             (uid != null && uid.matches(Regex("[0-9]{1,32}")) && !rootId.isNullOrBlank())))

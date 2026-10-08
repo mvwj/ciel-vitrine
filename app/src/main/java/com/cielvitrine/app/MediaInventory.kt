@@ -81,7 +81,7 @@ internal class MediaInventory(private val context: Context) {
                     add(ArchiveJob(ArchiveStore.randomId(), null, null,
                         ContentUris.withAppendedId(MediaStore.Files.getContentUri(volume.name), source.mediaId).toString(), name.take(1024), mime.take(256),
                         source.bytes, if (tooLarge) ArchivePhase.UNSUPPORTED_SIZE else ArchivePhase.QUEUED,
-                        batchId = batch.id, sourceStamp = source, createdAt = System.currentTimeMillis(),
+                        batchId = batch.id, sourceStamp = source, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
                         notice = if (tooLarge) "Файл учтён. Для загрузки свыше 128 МиБ ещё нужна поддержка частей." else null))
                 }
             }

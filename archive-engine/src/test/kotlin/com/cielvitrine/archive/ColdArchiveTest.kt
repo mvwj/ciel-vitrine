@@ -8,9 +8,10 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
 class ColdArchiveTest {
-    private class Fixture {
+    private class Fixture(extension: ContainerExtension = ContainerExtension.CV2) {
         val source = ByteArray(131079) { (it * 31).toByte() }
-        var saved = Json.encodeToString(ArchiveJob.serializer(), ArchiveJob("a".repeat(32), "123", "root-1", "source", "photo.heic", "image/heic", source.size.toLong()))
+        var saved = Json.encodeToString(ArchiveJob.serializer(), ArchiveJob("a".repeat(32), "123", "root-1", "source", "photo.heic", "image/heic", source.size.toLong(), containerExtension = extension))
+        val paths = mutableListOf<String>()
         val journal = object : ArchiveJournal {
             override fun load(id: String) = Json.decodeFromString(ArchiveJob.serializer(), saved)
             override fun save(job: ArchiveJob) { job.validate(); saved = Json.encodeToString(ArchiveJob.serializer(), job) }
@@ -37,16 +38,21 @@ class ColdArchiveTest {
             override fun requireAccount(uid: String, rootId: String) { require(!wrongAccount && uid == "123" && rootId == "root-1") }
             override fun ensureColdFolders() {}
             override fun inspect(path: String): ArchiveRemote? {
+                paths += path
                 inspections++
                 return remote?.let { ArchiveRemote("object", if (changeVersion && inspections > 2) "v2" else "v1", it.size.toLong(), null) }
             }
             override fun uploadNew(path: String, bytes: Long, open: () -> InputStream) {
+                paths += path
                 uploads++
                 assertEquals(ArchivePhase.UPLOAD_UNCERTAIN, journal.load("a".repeat(32)).phase)
                 remote = open().use { it.readBytes() }
                 if (throwAfterCommit) error("Reply lost after commit")
             }
-            override fun <T> readback(path: String, read: (InputStream) -> T): T = remote!!.inputStream().use(read)
+            override fun <T> readback(path: String, read: (InputStream) -> T): T {
+                paths += path
+                return remote!!.inputStream().use(read)
+            }
         }
         fun step() = ColdArchive(journal, staging, cloud).step("a".repeat(32))
     }
@@ -62,6 +68,20 @@ class ColdArchiveTest {
         assertEquals(ArchivePhase.VERIFIED, f.step().phase)
         assertEquals(1, f.uploads)
         assertEquals(131079, f.source.size)
+    }
+    @Test fun `old and new names retain their exact paths through restart after uncertain upload`() {
+        for (extension in ContainerExtension.entries) {
+            val f = Fixture(extension)
+            if (extension == ContainerExtension.CV2) assertFalse(f.saved.contains("containerExtension"))
+            val expectedPath = "app:/ciel-vitrine-v2/cold/${"a".repeat(32)}${extension.suffix}"
+            assertEquals(expectedPath, f.journal.load("a".repeat(32)).path)
+            f.step(); f.throwAfterCommit = true
+            assertThrows(IllegalStateException::class.java) { f.step() }
+            assertEquals(expectedPath, f.journal.load("a".repeat(32)).path)
+            assertEquals(ArchivePhase.VERIFIED, f.step().phase)
+            assertEquals(1, f.uploads)
+            assertEquals(setOf(expectedPath), f.paths.toSet())
+        }
     }
     @Test fun `tampered remote and missing path preserve staging and do not authorize retry PUT`() {
         val f = Fixture(); f.step(); f.step()
