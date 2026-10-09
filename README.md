@@ -2,18 +2,18 @@
 
 Android gallery with exact-byte originals, archive-first cloud workflow and explicitly scoped deletion. One connected provider at a time; Yandex Disk is the first integration, Google Drive follows.
 
-## Current milestone: 0.1.4
+## Current milestone: 0.1.5
 
-New cloud containers and manual exports use the neutral `.bin` extension. The bytes remain CVPOS2; readers identify the format from its contents. Existing `.cv2` jobs retain their persisted naming policy, including uncertain uploads. The extension does not hide the public recovery key or establish confidentiality from the provider.
+New cloud containers and manual exports use the neutral `.bin` extension. CVPOS3 preserves observed source dates alongside exact original bytes; CVPOS2 and POS v1 remain readable. Existing jobs retain their naming policy, including uncertain uploads. The extension does not hide the public recovery key or establish confidentiality from the provider.
 
 - Native Compose gallery: real MediaStore images/videos, paginated recent additions, device folders, local albums, favorites, photo/GIF viewer and Media3 video playback.
 - Full/selected/mixed media access is visible. A revoked grant is never treated as deletion.
-- CVPOS2 creation and recovery through Android's document picker, with legacy POS v1 import. Exact bytes, standard AES-256-GCM, public recovery key and full non-executable recovery recipe inside the file. Export uses the same original-format reads as the archive queue and verifies the source through a second full read; both operations reread the destination. The source is never removed.
+- CVPOS3 creation and recovery through Android's document picker, with CVPOS2/POS v1 import. Exact bytes, standard AES-256-GCM, public recovery key and full non-executable recovery recipe inside the file. Source dates are captured from the actual original descriptor and carried into independent working copies. Restore verifies bytes and attempts native-precision mtime restoration; unsupported destination dates are reported. Original EXIF dates are preserved in the media bytes; unknown filesystem creation dates are not invented. Export verifies the source through a second full read; both operations reread the destination. The source is never removed.
 - Conservative JVM safety prototype: complete compound resource sets, bound proof persistence, separate physical copies, transactional reservations, atomic terminal state/outbox and 60-day Trash preflight.
 - Yandex LoginSDK with the registered public Client ID, device-local AES-GCM/Android Keystore session storage and read-only identity/Disk/app-folder checks. A saved account cannot be silently rebound. A successful real-account sign-in is still pending device validation.
 - Offline archive-all inventory: encrypted Android SQLite payloads, transactional scan pages/cursors, source epochs/generations and exact source rereads; persistent bounded upload queue, pause/resume, account/root binding and upload without overwrite. Full cloud recovery readback compares original and container SHA-256, length, bundle identity and stable observed object identity/version. An uncertain upload is reconciled by reading, never a blind repeated PUT.
 
-The upload prototype has a **128 MiB per-resource limit** and requires an unmetered network and a stable app-folder ID. Larger files appear explicitly as unsupported in the inventory. Manual complete resource sets can create physically separate Gallery Store containers after fresh readback of every cold member. Real-account Yandex validation is pending. Multipart, automatic Live Photo pairing, cloud thumbnails/viewing, self-repair, automatic cleanup and destructive actions are not available. JDBC stores remain JVM safety prototypes; Android archive rows do not authorize deleting originals. Public recovery keys deliberately permit the provider to read originals. Use the local 0.1.4 APK for the registered OAuth certificate; CI uses a different certificate.
+The upload prototype has a **128 MiB per-resource limit** and requires an unmetered network and a stable app-folder ID. Larger files appear explicitly as unsupported in the inventory. Manual complete resource sets can create physically separate Gallery Store containers after fresh readback of every cold member. Real-account Yandex validation is pending. Multipart, automatic Live Photo pairing, cloud thumbnails/viewing, self-repair, automatic cleanup and destructive actions are not available. JDBC stores remain JVM safety prototypes; Android archive rows do not authorize deleting originals. Public recovery keys deliberately permit the provider to read originals. Use the local 0.1.5 APK for the registered OAuth certificate; CI uses a different certificate.
 
 ## Design
 
@@ -25,6 +25,8 @@ The upload prototype has a **128 MiB per-resource limit** and requires an unmete
 - [Mass queue and working originals validation](docs/VALIDATION_0_1_3_RU.md)
 - [Neutral container names and compatibility validation](docs/VALIDATION_0_1_4_RU.md)
 - [CVPOS2 format and recovery](docs/CVPOS2_SPEC.md)
+- [CVPOS3 original dates and recovery](docs/CVPOS3_SPEC.md)
+- [Ten-photograph and date validation](docs/VALIDATION_0_1_5_RU.md)
 - [v26 audit](gallery_architecture_v26_audit_ru.md)
 - [v29 working specification](docs/SPEC_V29.md)
 - [Experimental POS v1 byte layout](docs/POS_V1_SPEC.md)
@@ -46,6 +48,8 @@ Install `requirements-recovery.txt` into a Python environment first. Set `POS2_P
 
 APK: `app/build/outputs/apk/debug/app-debug.apk`. Debug signing is for development only.
 
+The optional Android ten-photo instrumentation test requires `./scripts/prepare-photo-corpus.ps1` before building `:app:assembleDebugAndroidTest`. It downloads ten pinned public JPEG samples and verifies their hashes against the tracked corpus manifest. The simulated-cloud test runs on an isolated test emulator; the real-Yandex method requires a connected account and leaves its own verified test containers in the cloud. Never run the full permission/inventory test suite against a personal phone library. See [0.1.5 validation](docs/VALIDATION_0_1_5_RU.md) for measured results and limits.
+
 For Windows hosts affected by Java temporary socket path virtualization, use `./scripts/build-local.ps1`; it applies the [OpenJDK process-local workaround](https://mail.openjdk.org/pipermail/nio-dev/2023-March/013297.html). Compose BOM is pinned to 2025.10.01 for SDK 36; the September 2026 BOM requires SDK 37.
 
 ## Offline recovery
@@ -55,4 +59,4 @@ python pos-reference-decoder/python/ciel_pos_decoder.py original.pos --output re
 python pos-reference-decoder/python/ciel_pos2_decoder.py original.bin --output recovered-original.bin
 ```
 
-The independent JVM distribution (`./gradlew :pos-reference-decoder:installDist`) supports both formats using Java 17+. CVPOS2 recovery checks bounded framing, GCM tags, prefix/original hashes, the mandatory final record and EOF. Public keys and hashes establish internal consistency; trusted identity requires the independently captured original passport. CVPOS2 embeds the full recipe. Legacy POS v1 still needs its external specification and decoder.
+The independent JVM distribution (`./gradlew :pos-reference-decoder:installDist`) supports all three formats using Java 17+. CVPOS2/3 recovery checks bounded framing, GCM tags, prefix/original hashes, the mandatory final record and EOF. Public keys and hashes establish internal consistency; trusted identity requires the independently captured original passport. CVPOS2/3 embed the full recipe. Legacy POS v1 still needs its external specification and decoder.

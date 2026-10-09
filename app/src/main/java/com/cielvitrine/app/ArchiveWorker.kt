@@ -88,14 +88,18 @@ internal class AndroidArchiveStaging(private val context: Context, private val s
             val written = if (job.zone == OriginalZone.COLD) {
                 inventory.requireUnchanged(job)
                 val result = inventory.openOriginal(job).use { source -> FileOutputStream(temp).use { output ->
-                    val result = Pos2.write(stopAware(source), output, job.name, job.mime, job.sourceBytes, ColdArchive.MAX_BYTES)
+                    val dates = OriginalDatePolicy.capture(context, android.net.Uri.parse(job.source), source)
+                    val result = Pos2.write(stopAware(source), output, job.name, job.mime, job.sourceBytes, ColdArchive.MAX_BYTES, times = dates)
+                    require(OriginalDatePolicy.capture(context, android.net.Uri.parse(job.source), source) == dates)
                     output.fd.sync(); result
                 } }
                 inventory.requireUnchanged(job)
                 val digest = MessageDigest.getInstance("SHA-256"); var bytes = 0L
-                inventory.openOriginal(job).use { source -> val input = stopAware(source); val buffer = ByteArray(65536)
+                inventory.openOriginal(job).use { source -> require(OriginalDatePolicy.capture(context, android.net.Uri.parse(job.source), source) == result.times)
+                    val input = stopAware(source); val buffer = ByteArray(65536)
                     while (true) { val n = input.read(buffer); if (n < 0) break; require(n > 0)
                         bytes += n; require(bytes <= ColdArchive.MAX_BYTES); digest.update(buffer, 0, n) }
+                    require(OriginalDatePolicy.capture(context, android.net.Uri.parse(job.source), source) == result.times)
                 }
                 inventory.requireUnchanged(job)
                 require(bytes == result.originalBytes && digest.digest().joinToString("") { "%02x".format(it) } == result.originalSha256)

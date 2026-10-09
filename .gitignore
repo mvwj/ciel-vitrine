@@ -37,3 +37,4 @@ artifacts/
 .venv/
 emulator-*.log
 
+app/src/androidTest/assets/photo-corpus/

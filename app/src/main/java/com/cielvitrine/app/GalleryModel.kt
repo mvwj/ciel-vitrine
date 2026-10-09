@@ -144,8 +144,7 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
             mutable.value = mutable.value.copy(fileOperationRunning = true)
             try {
                 val result = withContext(Dispatchers.IO) {
-                    val resolver = getApplication<Application>().contentResolver
-                    if (restore) PortableFiles.restoreAndReadBack(resolver, source, destination)
+                    if (restore) PortableFiles.restoreAndReadBack(getApplication<Application>(), source, destination)
                     else PortableFiles.packAndReadBack(getApplication<Application>(), source, destination)
                 }
                 message(result)

@@ -1,0 +1,62 @@
+[
+  {
+    "name": "Canon_40D.jpg",
+    "url": "https://raw.githubusercontent.com/ianare/exif-samples/5332a9cf0220e9c6c93f88a187daa90808051e10/jpg/Canon_40D.jpg",
+    "bytes": 7958,
+    "sha256": "6bfdabd4fc33d112283c147acccc574e770bbe6fbdbc3d4da968ba7b606ecc2f"
+  },
+  {
+    "name": "Canon_DIGITAL_IXUS_400.jpg",
+    "url": "https://raw.githubusercontent.com/ianare/exif-samples/5332a9cf0220e9c6c93f88a187daa90808051e10/jpg/Canon_DIGITAL_IXUS_400.jpg",
+    "bytes": 9198,
+    "sha256": "23c1ec51c075d6864862412d07b9d0f07e84237af68972c1d1293e4c28f73e4f"
+  },
+  {
+    "name": "Canon_PowerShot_S40.jpg",
+    "url": "https://raw.githubusercontent.com/ianare/exif-samples/5332a9cf0220e9c6c93f88a187daa90808051e10/jpg/Canon_PowerShot_S40.jpg",
+    "bytes": 32764,
+    "sha256": "8a9d04b92d0de5836c59ede8ae421235488e4031e893e07b1fe7e4b78f6a9901"
+  },
+  {
+    "name": "Fujifilm_FinePix6900ZOOM.jpg",
+    "url": "https://raw.githubusercontent.com/ianare/exif-samples/5332a9cf0220e9c6c93f88a187daa90808051e10/jpg/Fujifilm_FinePix6900ZOOM.jpg",
+    "bytes": 4278,
+    "sha256": "40afc753b4e83d72cfa1080ae7a10310e0fcbb9e4f6ebdf32c7b2f1553c83fe3"
+  },
+  {
+    "name": "Fujifilm_FinePix_E500.jpg",
+    "url": "https://raw.githubusercontent.com/ianare/exif-samples/5332a9cf0220e9c6c93f88a187daa90808051e10/jpg/Fujifilm_FinePix_E500.jpg",
+    "bytes": 2241,
+    "sha256": "ffbee7b07bf267dc0fb52817f8866df647758f7d48ac93e7a73d1914fb4c74da"
+  },
+  {
+    "name": "Kodak_CX7530.jpg",
+    "url": "https://raw.githubusercontent.com/ianare/exif-samples/5332a9cf0220e9c6c93f88a187daa90808051e10/jpg/Kodak_CX7530.jpg",
+    "bytes": 5958,
+    "sha256": "ac759931999a215ef78469a82bdfc382ccba96eb8d039ec9e81e53a9a419d35e"
+  },
+  {
+    "name": "Konica_Minolta_DiMAGE_Z3.jpg",
+    "url": "https://raw.githubusercontent.com/ianare/exif-samples/5332a9cf0220e9c6c93f88a187daa90808051e10/jpg/Konica_Minolta_DiMAGE_Z3.jpg",
+    "bytes": 36971,
+    "sha256": "b1b914f47528384e6252fa7caabb489f123b88c81ebd62ecb8eacdf64c46fd5e"
+  },
+  {
+    "name": "Nikon_COOLPIX_P1.jpg",
+    "url": "https://raw.githubusercontent.com/ianare/exif-samples/5332a9cf0220e9c6c93f88a187daa90808051e10/jpg/Nikon_COOLPIX_P1.jpg",
+    "bytes": 7068,
+    "sha256": "896b47424dc1c87154a50b40394ae887a0b0d7d830f38a9d969295995f27ef43"
+  },
+  {
+    "name": "Nikon_D70.jpg",
+    "url": "https://raw.githubusercontent.com/ianare/exif-samples/5332a9cf0220e9c6c93f88a187daa90808051e10/jpg/Nikon_D70.jpg",
+    "bytes": 14034,
+    "sha256": "8e2a627b96ca71c20129161f46bda3d338407da99bd11b1055adb27af27d7ef5"
+  },
+  {
+    "name": "Olympus_C8080WZ.jpg",
+    "url": "https://raw.githubusercontent.com/ianare/exif-samples/5332a9cf0220e9c6c93f88a187daa90808051e10/jpg/Olympus_C8080WZ.jpg",
+    "bytes": 3224,
+    "sha256": "3495de26279d8d1e442177ba43cef855438e3b321481b9ee2ff513decb13ed9c"
+  }
+]

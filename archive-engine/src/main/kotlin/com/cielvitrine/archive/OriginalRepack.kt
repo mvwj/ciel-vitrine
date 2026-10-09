@@ -21,10 +21,10 @@ object OriginalRepack {
         }
         val thread = Thread(decode, "original-repack").apply { isDaemon = true; start() }
         try {
-            val result = input.use { Pos2.write(it, output, name, mime, proof.originalBytes, ColdArchive.MAX_BYTES) }
+            val result = input.use { Pos2.write(it, output, name, mime, proof.originalBytes, ColdArchive.MAX_BYTES, times = proof.times) }
             // EOF in the pipe does not mean the source footer was valid: the producer must also succeed.
             decode.get()
-            require(result.originalSha256 == proof.originalSha256 && result.originalBytes == proof.originalBytes && result.bundleId != proof.bundleId)
+            require(result.originalSha256 == proof.originalSha256 && result.originalBytes == proof.originalBytes && result.bundleId != proof.bundleId && result.times == proof.times)
             return result
         } finally {
             input.close(); pipe.close(); decode.cancel(true); thread.join(1000)

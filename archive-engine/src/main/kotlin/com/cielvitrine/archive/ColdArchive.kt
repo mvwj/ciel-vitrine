@@ -2,6 +2,7 @@ package com.cielvitrine.archive
 
 import com.cielvitrine.pos.Pos2
 import com.cielvitrine.pos.Pos2Result
+import com.cielvitrine.pos.OriginalTimes
 import kotlinx.serialization.Serializable
 import java.io.InputStream
 import java.io.OutputStream
@@ -13,8 +14,8 @@ import java.io.OutputStream
     val generation: Long?, val modifiedSeconds: Long, val bytes: Long?, val width: Int, val height: Int,
     val durationMillis: Long, val capturedAt: Long?)
 @Serializable data class ArchiveProof(val bundleId: String, val originalBytes: Long, val originalSha256: String,
-    val containerBytes: Long, val containerSha256: String) {
-    companion object { fun from(p: Pos2Result) = ArchiveProof(p.bundleId, p.originalBytes, p.originalSha256, p.containerBytes, p.containerSha256) }
+    val containerBytes: Long, val containerSha256: String, val times: OriginalTimes? = null) {
+    companion object { fun from(p: Pos2Result) = ArchiveProof(p.bundleId, p.originalBytes, p.originalSha256, p.containerBytes, p.containerSha256, p.times) }
 }
 @Serializable data class ArchiveJob(val id: String, val uid: String?, val rootId: String?, val source: String,
     val name: String, val mime: String, val sourceBytes: Long?, val phase: ArchivePhase = ArchivePhase.QUEUED,
@@ -38,6 +39,7 @@ import java.io.OutputStream
         if (zone == OriginalZone.GALLERY) require(groupId != null && coldId != null)
         if (phase in setOf(ArchivePhase.PREPARED, ArchivePhase.UPLOAD_UNCERTAIN, ArchivePhase.VERIFIED)) require(proof != null && uid != null && rootId != null)
         proof?.let { require(it.originalBytes in 0..ColdArchive.MAX_BYTES && it.containerBytes in 1..(ColdArchive.MAX_BYTES + 262144))
+            it.times?.validate()
             require(it.bundleId.matches(Regex("[0-9a-f]{32}")) && listOf(it.originalSha256, it.containerSha256).all { h -> h.matches(Regex("[0-9a-f]{64}")) }) }
         if (phase == ArchivePhase.VERIFIED) require(!remoteId.isNullOrBlank() && !remoteModified.isNullOrBlank() && verifiedAt != null)
     }
@@ -90,7 +92,7 @@ class ColdArchive(private val journal: ArchiveJournal, private val staging: Arch
                 val proof = staging.prepare(job)
                 if (job.zone == OriginalZone.GALLERY) {
                     val cold = journal.load(job.coldId!!).proof!!
-                    require(proof.originalBytes == cold.originalBytes && proof.originalSha256 == cold.originalSha256)
+                    require(proof.originalBytes == cold.originalBytes && proof.originalSha256 == cold.originalSha256 && proof.times == cold.times)
                 }
                 check(!stopped())
                 job = job.copy(phase = ArchivePhase.PREPARED, proof = proof, notice = null)
@@ -125,7 +127,7 @@ class ColdArchive(private val journal: ArchiveJournal, private val staging: Arch
                     require(group.coldIds.map(journal::load).none { it.remoteId == after.id })
                     require(group.galleryIds.filter { it != job.id }.map(journal::load).none { it.remoteId == after.id })
                     val cold = journal.load(job.coldId!!).proof!!
-                    require(proof.bundleId != cold.bundleId && proof.containerSha256 != cold.containerSha256)
+                    require(proof.bundleId != cold.bundleId && proof.containerSha256 != cold.containerSha256 && proof.times == cold.times)
                 }
                 cloud.requireAccount(job.uid!!, job.rootId!!)
                 check(!stopped())

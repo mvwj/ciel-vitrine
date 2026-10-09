@@ -14,24 +14,27 @@ import java.io.FileInputStream
 /** A user-selected file copy. Never authorizes deleting a MediaStore original. */
 object PortableFiles {
     fun packAndReadBack(context: Context, source: Uri, destination: Uri): String =
-        packAndReadBack(context.contentResolver, source, destination) { MediaInventory(context).openOriginal(source) }
+        packAndReadBack(context.contentResolver, source, destination, { OriginalDatePolicy.capture(context, source, it) }) { MediaInventory(context).openOriginal(source) }
 
     /** The opener defines the selected representation. App callers use the Context overload for actual originals. */
     fun packAndReadBack(resolver: ContentResolver, source: Uri, destination: Uri,
+        captureTimes: (InputStream) -> com.cielvitrine.pos.OriginalTimes? = { null },
         openSource: () -> InputStream = { resolver.openInputStream(source) ?: error("Source unavailable") }): String = openSource().use { sourceInput ->
         // Outside cleanup: an alias rejection must never delete the source through its destination URI.
         ensureDistinct(resolver, source, destination, sourceInput)
         try {
+            val times = captureTimes(sourceInput)
             val name = resolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
                 if (c.moveToFirst()) c.getString(0) else null
             } ?: "original.bin"
             val written = resolver.openOutputStream(destination, "wt")!!.use { output ->
-                Pos2.write(sourceInput, output, name, resolver.getType(source) ?: "application/octet-stream")
+                Pos2.write(sourceInput, output, name, resolver.getType(source) ?: "application/octet-stream", times = times)
             }
             val digest = java.security.MessageDigest.getInstance("SHA-256"); var bytes = 0L
-            openSource().use { again -> val buffer = ByteArray(65536)
+            openSource().use { again -> check(captureTimes(again) == times) { "Исходные даты изменились во время экспорта" }; val buffer = ByteArray(65536)
                 while (true) { val n = again.read(buffer); if (n < 0) break; require(n > 0)
                     bytes += n; require(bytes <= written.originalBytes); digest.update(buffer, 0, n) }
+                check(captureTimes(again) == times) { "Исходные даты изменились во время экспорта" }
             }
             val hash = digest.digest().joinToString("") { "%02x".format(it) }
             check(bytes == written.originalBytes && hash == written.originalSha256) { "Исходный файл изменился во время экспорта" }
@@ -44,16 +47,21 @@ object PortableFiles {
         }
     }
 
-    fun restoreAndReadBack(resolver: ContentResolver, source: Uri, destination: Uri): String {
+    fun restoreAndReadBack(context: Context, source: Uri, destination: Uri): String =
+        restoreAndReadBack(context.contentResolver, source, destination) { OriginalDatePolicy.restore(context, destination, it) }
+
+    fun restoreAndReadBack(resolver: ContentResolver, source: Uri, destination: Uri,
+        restoreTimes: (com.cielvitrine.pos.OriginalTimes?) -> String = { "" }): String {
         ensureDistinct(resolver, source, destination)
         try {
+            var times: com.cielvitrine.pos.OriginalTimes? = null
             val decoded = resolver.openInputStream(source)!!.buffered().use { input ->
                 input.mark(8)
                 val magic = ByteArray(8); var n = 0
                 while (n < 8) { val count = input.read(magic, n, 8 - n); if (count <= 0) break; n += count }
                 input.reset()
                 resolver.openOutputStream(destination, "wt")!!.use { output ->
-                    if (magic.contentEquals(Pos2.MAGIC)) Pos2.read(input, output).let { it.originalBytes to it.originalSha256 }
+                    if (Pos2.recognizes(magic)) Pos2.read(input, output).let { times = it.times; it.originalBytes to it.originalSha256 }
                     else PosReader.read(input, output).let { it.recoveredByteLength to it.recoveredSha256Hex }
                 }
             }
@@ -71,7 +79,7 @@ object PortableFiles {
             }
             val hash = digest.digest().joinToString("") { "%02x".format(it) }
             check(length == decoded.first && hash == decoded.second) { "Сохранённый файл отличается от архива" }
-            return "Файл восстановлен и прочитан обратно. $length байт, SHA-256 совпал."
+            return "Файл восстановлен и прочитан обратно. $length байт, SHA-256 совпал. ${restoreTimes(times)}"
         } catch (e: Exception) {
             runCatching { DocumentsContract.deleteDocument(resolver, destination) }
             throw e

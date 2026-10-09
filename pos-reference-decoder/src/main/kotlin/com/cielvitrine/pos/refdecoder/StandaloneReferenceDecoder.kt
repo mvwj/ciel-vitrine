@@ -14,7 +14,7 @@ import java.util.zip.CRC32
  */
 fun main(args: Array<String>) {
     if (args.isEmpty()) {
-        println("Usage: StandaloneReferenceDecoder <input.cv2|input.pos> [NEW_output_file]")
+        println("Usage: StandaloneReferenceDecoder <input.bin|input.cv2|input.pos> [NEW_output_file]")
         return
     }
 
@@ -23,8 +23,16 @@ fun main(args: Array<String>) {
 
     try {
         require(outputFile == null || !outputFile.exists()) { "Output already exists; choose a new path" }
-        val isV2 = inputFile.inputStream().use { it.readNBytes(8).contentEquals("CVPOS2\r\n".toByteArray()) }
+        val isV2 = inputFile.inputStream().use { val magic = it.readNBytes(8); magic.contentEquals("CVPOS2\r\n".toByteArray()) || magic.contentEquals("CVPOS3\r\n".toByteArray()) }
         val result = if (isV2) decodePos2(inputFile, outputFile) else decodePos(inputFile, outputFile)
+        if (result.dates.isNotEmpty()) {
+            if (outputFile != null && result.dates.getValue("mtime_seconds").isNotEmpty()) runCatching {
+                val expected = java.nio.file.attribute.FileTime.from(java.time.Instant.ofEpochSecond(result.dates.getValue("mtime_seconds").toLong(), result.dates.getValue("mtime_nanos").toLong()))
+                Files.setLastModifiedTime(outputFile.toPath(), expected)
+                if (Files.getLastModifiedTime(outputFile.toPath()) != expected) println("Destination time precision differs; original dates remain in the container.")
+            }.onFailure { println("Destination cannot restore mtime; original dates remain in the container.") }
+            println("Original date observations: ${result.dates}")
+        }
         println("Decoded successfully: ${result.bytesRecovered} bytes, SHA-256=${result.sha256Hex}")
     } catch (e: Exception) {
         System.err.println("Decode failed: ${e.message}")
@@ -36,7 +44,8 @@ fun main(args: Array<String>) {
 data class DecodeResult(
     val bytesRecovered: Long,
     val recordCount: Long,
-    val sha256Hex: String
+    val sha256Hex: String,
+    val dates: Map<String, String> = emptyMap()
 )
 
 fun decodePos(inputFile: File, outputFile: File?): DecodeResult {

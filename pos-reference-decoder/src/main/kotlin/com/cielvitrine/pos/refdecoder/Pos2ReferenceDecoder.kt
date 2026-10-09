@@ -32,16 +32,29 @@ private fun decodePos2Stream(input: InputStream, output: OutputStream): DecodeRe
         return bytes
     }
     val fixed = exact(12)
-    require(fixed.copyOfRange(0, 8).contentEquals("CVPOS2\r\n".toByteArray()))
+    val magic = fixed.copyOfRange(0, 8)
+    val v3 = magic.contentEquals("CVPOS3\r\n".toByteArray())
+    require(v3 || magic.contentEquals("CVPOS2\r\n".toByteArray()))
     val jsonSize = ByteBuffer.wrap(fixed, 8, 4).int
     require(jsonSize in 1..65536)
     val jsonBytes = exact(jsonSize)
     val text = Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(jsonBytes)).toString()
     checkFlatUniqueFields(text)
     val meta = Json.parseToJsonElement(text).jsonObject
-    require(meta.keys == setOf("format", "version", "cipher", "key_hex", "nonce_prefix_hex", "bundle_id", "chunk_bytes", "name", "mime", "recipe"))
+    val timeKeys = setOf("mtime_seconds", "mtime_nanos", "creation_millis", "media_added_millis", "media_taken_millis")
+    require(meta.keys == setOf("format", "version", "cipher", "key_hex", "nonce_prefix_hex", "bundle_id", "chunk_bytes", "name", "mime", "recipe") + if (v3) timeKeys else emptySet())
     require(meta.all { (k, v) -> v is JsonPrimitive && v.isString == (k !in setOf("version", "chunk_bytes")) })
-    require(meta.getValue("format").jsonPrimitive.content == "CVPOS2" && meta.getValue("version").jsonPrimitive.int == 2 && meta.getValue("cipher").jsonPrimitive.content == "AES-256-GCM")
+    require(meta.getValue("format").jsonPrimitive.content == (if (v3) "CVPOS3" else "CVPOS2") && meta.getValue("version").jsonPrimitive.int == (if (v3) 3 else 2) && meta.getValue("cipher").jsonPrimitive.content == "AES-256-GCM")
+    val dates = if (v3) timeKeys.associateWith { meta.getValue(it).jsonPrimitive.content } else emptyMap()
+    if (v3) {
+        fun number(key: String): Long? = dates.getValue(key).let { value ->
+            if (value.isEmpty()) null else { require(value.matches(Regex("0|-?[1-9][0-9]{0,17}"))); value.toLong() }
+        }
+        val seconds = number("mtime_seconds"); val nanos = number("mtime_nanos")
+        require((seconds == null) == (nanos == null))
+        require(seconds == null || seconds in -62135596800L..253402300799L && nanos!! in 0..999999999)
+        for (key in timeKeys - setOf("mtime_seconds", "mtime_nanos")) require(number(key)?.let { it in 0..253402300799999L } != false)
+    }
     fun hex(field: String, bytes: Int): ByteArray {
         val value = meta.getValue(field).jsonPrimitive.content
         require(value.matches(Regex("[0-9a-fA-F]{${bytes * 2}}")))
@@ -52,7 +65,7 @@ private fun decodePos2Stream(input: InputStream, output: OutputStream): DecodeRe
     hex("bundle_id", 16)
     val chunk = meta.getValue("chunk_bytes").jsonPrimitive.int.also { require(it in 65536..1048576) }
     require(meta.getValue("name").jsonPrimitive.content.length <= 1024 && meta.getValue("mime").jsonPrimitive.content.length <= 256)
-    require(meta.getValue("recipe").jsonPrimitive.content.startsWith("CVPOS2 byte layout v2."))
+    require(meta.getValue("recipe").jsonPrimitive.content.startsWith(if (v3) "CVPOS3 byte layout v3." else "CVPOS2 byte layout v2."))
     val header = fixed + jsonBytes
     val h = MessageDigest.getInstance("SHA-256").digest(header)
     val prefix = MessageDigest.getInstance("SHA-256").apply { update(header) }
@@ -78,7 +91,7 @@ private fun decodePos2Stream(input: InputStream, output: OutputStream): DecodeRe
             val hash = original.digest()
             require(MessageDigest.isEqual(hash, plaintext.copyOfRange(0, 32)) && MessageDigest.isEqual(prefix.digest(), plaintext.copyOfRange(32, 64)))
             require(input.read() == -1)
-            return DecodeResult(position, seq, hash.joinToString("") { "%02x".format(it) })
+            return DecodeResult(position, seq, hash.joinToString("") { "%02x".format(it) }, dates)
         }
     }
 }

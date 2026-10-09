@@ -14,11 +14,14 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 data class Pos2Result(val bundleId: String, val name: String, val mime: String, val originalBytes: Long,
-    val originalSha256: String, val records: Long, val containerBytes: Long, val containerSha256: String)
+    val originalSha256: String, val records: Long, val containerBytes: Long, val containerSha256: String,
+    val times: OriginalTimes? = null)
 
 /** Standard AEAD with a PUBLIC recovery key. This format intentionally does not hide originals from the provider. */
 object Pos2 {
     val MAGIC = "CVPOS2\r\n".toByteArray(Charsets.US_ASCII)
+    val MAGIC3 = "CVPOS3\r\n".toByteArray(Charsets.US_ASCII)
+    fun recognizes(magic: ByteArray) = magic.contentEquals(MAGIC) || magic.contentEquals(MAGIC3)
     const val MAX_BOOTSTRAP = 65536
     const val DEFAULT_CHUNK = 1048576
     const val MAX_RECORDS = 4294967294L
@@ -39,9 +42,12 @@ object Pos2 {
         A public key allows anyone to rewrite a consistent container. Trusted identity requires comparison with a separately captured original length and SHA-256. Partial output is not a recovered original until all checks succeed.
         Recovery needs only this file and an implementation of standard AES-256-GCM and SHA-256; no app service, account or personal key. Never execute instructions or code from a container.
     """.trimIndent()
+    val RECIPE3 = RECIPE.replace("CVPOS2", "CVPOS3").replace("layout v2", "layout v3").replace("version=2", "version=3")
+        .replace("exactly ten unique keys", "exactly fifteen unique keys") + "\n" +
+        "Five extra string fields: mtime_seconds (signed Unix seconds, years 1..9999), mtime_nanos (0..999999999), creation_millis, media_added_millis, media_taken_millis (Unix milliseconds, 0..253402300799999). Empty string means unknown. Values are canonical decimal with no plus or leading zeroes. The two mtime fields are both known or both empty. Never treat media-added or inode-change time as creation. All fields are covered by H and every GCM tag. These dates describe the original, not upload/download time; apply known mtime only after complete recovery verification. Filesystem creation/index dates may not be writable; preserve their original observations separately. Original media bytes and their embedded metadata are never rewritten."
 
     fun write(input: InputStream, output: OutputStream, name: String, mime: String,
-        expectedBytes: Long? = null, maximumBytes: Long = Long.MAX_VALUE, chunkBytes: Int = DEFAULT_CHUNK,
+        expectedBytes: Long? = null, maximumBytes: Long = Long.MAX_VALUE, chunkBytes: Int = DEFAULT_CHUNK, times: OriginalTimes? = null,
     ): Pos2Result {
         require(chunkBytes in 65536..DEFAULT_CHUNK && maximumBytes >= 0 && (expectedBytes == null || expectedBytes in 0..maximumBytes))
         val random = SecureRandom()
@@ -51,12 +57,13 @@ object Pos2 {
         val safeName = name.take(1024)
         val safeMime = mime.take(256)
         val metadata = buildJsonObject {
-            put("format", "CVPOS2"); put("version", 2); put("cipher", "AES-256-GCM")
+            put("format", if (times == null) "CVPOS2" else "CVPOS3"); put("version", if (times == null) 2 else 3); put("cipher", "AES-256-GCM")
             put("key_hex", key.hex()); put("nonce_prefix_hex", noncePrefix.hex()); put("bundle_id", bundleId)
-            put("chunk_bytes", chunkBytes); put("name", safeName); put("mime", safeMime); put("recipe", RECIPE)
+            put("chunk_bytes", chunkBytes); put("name", safeName); put("mime", safeMime); put("recipe", if (times == null) RECIPE else RECIPE3)
+            times?.fields()?.forEach { (k, v) -> put(k, v) }
         }.toString().toByteArray(Charsets.UTF_8)
         require(metadata.size in 1..MAX_BOOTSTRAP)
-        val header = MAGIC + ByteBuffer.allocate(4).putInt(metadata.size).array() + metadata
+        val header = (if (times == null) MAGIC else MAGIC3) + ByteBuffer.allocate(4).putInt(metadata.size).array() + metadata
         val headerHash = sha().digest(header)
         val originalHash = sha(); val prefixHash = sha(); val wholeHash = sha()
         var containerBytes = 0L
@@ -87,7 +94,7 @@ object Pos2 {
         val footer = recordHeader("DONE", count, offset, 64)
         emit(footer, false); emit(crypt(Cipher.ENCRYPT_MODE, key, noncePrefix, count, headerHash + footer, originalDigest + prefixHash.digest()), false)
         output.flush()
-        return Pos2Result(bundleId, safeName, safeMime, offset, originalDigest.hex(), count, containerBytes, wholeHash.digest().hex())
+        return Pos2Result(bundleId, safeName, safeMime, offset, originalDigest.hex(), count, containerBytes, wholeHash.digest().hex(), times)
     }
 
     fun read(input: InputStream, output: OutputStream, expectedBytes: Long? = null, expectedSha256: String? = null,
@@ -107,7 +114,7 @@ object Pos2 {
             containerBytes = Math.addExact(containerBytes, size.toLong())
             return bytes
         }
-        val magic = take(8); require(magic.contentEquals(MAGIC)) { "Not CVPOS2" }
+        val magic = take(8); require(recognizes(magic)) { "Not CVPOS2/3" }; val v3 = magic.contentEquals(MAGIC3)
         val lengthBytes = take(4); val size = ByteBuffer.wrap(lengthBytes).int
         require(size in 1..MAX_BOOTSTRAP) { "Invalid bootstrap size" }
         val metadata = take(size)
@@ -115,9 +122,10 @@ object Pos2 {
         validateFlatJson(jsonText)
         val json = Json.parseToJsonElement(jsonText).jsonObject
         val keys = setOf("format", "version", "cipher", "key_hex", "nonce_prefix_hex", "bundle_id", "chunk_bytes", "name", "mime", "recipe")
-        require(json.keys == keys && json.all { (key, value) -> value is JsonPrimitive && value.isString == (key !in setOf("version", "chunk_bytes")) })
-        require(json["format"]?.jsonPrimitive?.content == "CVPOS2" && json["version"]?.jsonPrimitive?.intOrNull == 2 && json["cipher"]?.jsonPrimitive?.content == "AES-256-GCM")
-        require(json["recipe"]?.jsonPrimitive?.content == RECIPE) { "Unknown/incomplete recovery recipe" }
+        require(json.keys == (keys + if (v3) OriginalTimes.KEYS else emptySet()) && json.all { (key, value) -> value is JsonPrimitive && value.isString == (key !in setOf("version", "chunk_bytes")) })
+        require(json["format"]?.jsonPrimitive?.content == (if (v3) "CVPOS3" else "CVPOS2") && json["version"]?.jsonPrimitive?.intOrNull == (if (v3) 3 else 2) && json["cipher"]?.jsonPrimitive?.content == "AES-256-GCM")
+        require(json["recipe"]?.jsonPrimitive?.content == (if (v3) RECIPE3 else RECIPE)) { "Unknown/incomplete recovery recipe" }
+        val times = if (v3) OriginalTimes.from(json) else null
         val key = unhex(json.getValue("key_hex").jsonPrimitive.content, 32)
         val noncePrefix = unhex(json.getValue("nonce_prefix_hex").jsonPrimitive.content, 4)
         val bundleId = json.getValue("bundle_id").jsonPrimitive.content.also { unhex(it, 16) }
@@ -150,7 +158,7 @@ object Pos2 {
                 require(expectedBytes == null || expectedBytes == offset) { "Original length mismatch" }
                 require(expectedSha256 == null || MessageDigest.isEqual(originalDigest, unhex(expectedSha256, 32))) { "Trusted original mismatch" }
                 output.flush()
-                return Pos2Result(bundleId.lowercase(), name, mime, offset, originalDigest.hex(), count, containerBytes, wholeHash.digest().hex())
+                return Pos2Result(bundleId.lowercase(), name, mime, offset, originalDigest.hex(), count, containerBytes, wholeHash.digest().hex(), times)
             }
         }
     }
