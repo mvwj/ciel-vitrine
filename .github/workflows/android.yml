@@ -33,6 +33,14 @@ jobs:
       - name: Independent AES container recovery
         run: python scripts/test_pos2_fixtures.py
       - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: validation-reports
+          path: |
+            **/build/test-results/**/*.xml
+            app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
         with:
           name: ciel-vitrine-debug
           path: app/build/outputs/apk/debug/app-debug.apk

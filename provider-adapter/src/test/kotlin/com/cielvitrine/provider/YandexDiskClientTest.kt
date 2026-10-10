@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Assertions.*
 class YandexDiskClientTest {
     @Test fun `metadata body failure retries the same GET once on a fresh connection`() {
         MockWebServer().use { server ->
+            // A single loopback address keeps DNS route fallback from consuming the deliberate retry.
+            server.start(java.net.InetAddress.getByName("127.0.0.1"), 0)
             val body = """{"type":"file","path":"app:/original.bin","resource_id":"object","size":25,"modified":"v1"}"""
             server.enqueue(MockResponse().setBody(body).setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY))
             server.enqueue(MockResponse().setBody(body))
@@ -29,6 +31,7 @@ class YandexDiskClientTest {
     }
     @Test fun `persistent metadata failure stops after two GETs`() {
         MockWebServer().use { server ->
+            server.start(java.net.InetAddress.getByName("127.0.0.1"), 0)
             repeat(2) { server.enqueue(MockResponse().setBody("{}      ").setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)) }
             val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient.Builder().retryOnConnectionFailure(false).build())
             assertThrows(IOException::class.java) { client.inspect("app:/original.bin") }
