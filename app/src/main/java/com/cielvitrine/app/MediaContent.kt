@@ -38,11 +38,11 @@ internal fun PhotoContent(item: MediaItem, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val loader = remember(context) { ImageLoader.Builder(context).diskCache(null).components { add(AnimatedImageDecoder.Factory()) }.build() }
     DisposableEffect(loader) { onDispose { loader.shutdown() } }
-    var attempt by remember(item.uri, item.generation, item.modifiedSeconds, item.bytes) { mutableIntStateOf(0) }
-    var failed by remember(item.uri, item.generation, item.modifiedSeconds, item.bytes, attempt) { mutableStateOf(false) }
-    var loading by remember(item.uri, item.generation, item.modifiedSeconds, item.bytes, attempt) { mutableStateOf(true) }
+    var attempt by remember(item.uri, item.binding, item.generation, item.modifiedSeconds, item.bytes) { mutableIntStateOf(0) }
+    var failed by remember(item.uri, item.binding, item.generation, item.modifiedSeconds, item.bytes, attempt) { mutableStateOf(false) }
+    var loading by remember(item.uri, item.binding, item.generation, item.modifiedSeconds, item.bytes, attempt) { mutableStateOf(true) }
     Box(modifier, contentAlignment = Alignment.Center) {
-        key(item.uri, item.generation, item.modifiedSeconds, item.bytes, attempt) {
+        key(item.uri, item.binding, item.generation, item.modifiedSeconds, item.bytes, attempt) {
             AsyncImage(
                 model = ImageRequest.Builder(context).data(item.uri).diskCachePolicy(CachePolicy.DISABLED).memoryCachePolicy(CachePolicy.DISABLED).build(),
                 imageLoader = loader, contentDescription = item.name,
@@ -61,8 +61,8 @@ internal fun PhotoContent(item: MediaItem, modifier: Modifier = Modifier) {
 internal fun VideoContent(item: MediaItem, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val owner = LocalLifecycleOwner.current
-    var attempt by remember(item.uri, item.generation, item.modifiedSeconds, item.bytes) { mutableIntStateOf(0) }
-    val player = remember(item.uri, item.generation, item.modifiedSeconds, item.bytes, attempt) { ExoPlayer.Builder(context).build() }
+    var attempt by remember(item.uri, item.binding, item.generation, item.modifiedSeconds, item.bytes) { mutableIntStateOf(0) }
+    val player = remember(item.uri, item.binding, item.generation, item.modifiedSeconds, item.bytes, attempt) { ExoPlayer.Builder(context).build() }
     var failed by remember(player) { mutableStateOf(false) }
     var loading by remember(player) { mutableStateOf(true) }
     DisposableEffect(player, owner) {

@@ -33,7 +33,7 @@ import kotlin.math.roundToInt
 
 private data class TimelineDay(val date: LocalDate, val members: List<MediaItem>, val headerIndex: Int)
 
-/** A full-width, zero-gap grid. Only the day headers separate its rows. */
+/** Square thumbnails with a narrow gutter; larger captions separate days. */
 @Composable
 internal fun MediaTimeline(
     media: List<MediaItem>, modifier: Modifier = Modifier, open: (MediaItem) -> Unit,
@@ -92,7 +92,7 @@ internal fun MediaTimeline(
         LazyVerticalGrid(
             columns = GridCells.Fixed(3), state = grid, modifier = Modifier.fillMaxSize().testTag("media-timeline"),
             contentPadding = PaddingValues(bottom = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(0.dp), verticalArrangement = Arrangement.spacedBy(0.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             item(key = "count", contentType = "count", span = { GridItemSpan(maxLineSpan) }) {
                 Text("${media.size} фото и видео", Modifier.padding(horizontal = 16.dp, vertical = 8.dp),

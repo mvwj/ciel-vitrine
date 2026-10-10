@@ -46,14 +46,15 @@ class MediaTimelineAndroidTest {
             }
         }
     }
-    @Test fun photosAreSquareAndTouchWhileDaysHaveASeparateCaptionAndGap() {
+    @Test fun photosAreSquareWithTwoDpGuttersWhileDaysHaveASeparateCaptionAndGap() {
         val items = media(2); show(items)
         fun bounds(index: Int) = compose.onNodeWithTag("media:${items[index].uri}").fetchSemanticsNode().boundsInRoot
         val first = bounds(0); val second = bounds(1); val rowBelow = bounds(3)
         assertEquals(first.width, first.height, 1f)
-        assertEquals(first.right, second.left, 1f)
+        val density = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
+        assertEquals(2f * density, second.left - first.right, 1f)
         assertEquals(first.top, second.top, 1f)
-        assertEquals(first.bottom, rowBelow.top, 1f)
+        assertEquals(2f * density, rowBelow.top - first.bottom, 1f)
         val nextDay = bounds(6)
         val caption = compose.onNodeWithTag("day:2026-09-24").fetchSemanticsNode().boundsInRoot
         assertTrue(nextDay.top > rowBelow.bottom)

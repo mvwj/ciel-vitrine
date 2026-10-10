@@ -8,6 +8,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.SystemBarStyle
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -46,21 +47,31 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlinx.coroutines.launch
 
-private val Ink = Color(0xFF253D50)
-private val Paper = Color(0xFFF8F7F3)
-private val Mist = Color(0xFFE5ECEB)
-private val Accent = Color(0xFF53746F)
+private val Ink = Color(0xFFE5ECEB)
+private val Paper = Color(0xFF11181C)
+private val Mist = Color(0xFF27343A)
+private val Accent = Color(0xFFA1CEC3)
+private val Card = Color(0xFF1C272D)
+internal val GalleryColors = darkColorScheme(
+    primary = Accent, onPrimary = Color(0xFF10382F),
+    secondary = Accent, onSecondary = Color(0xFF10382F),
+    background = Paper, surface = Paper, onSurface = Ink, onBackground = Ink,
+    surfaceVariant = Mist, onSurfaceVariant = Color(0xFFBBCACB),
+    secondaryContainer = Mist, onSecondaryContainer = Ink,
+    surfaceContainer = Card, surfaceContainerLow = Card,
+)
 private val russian = Locale.forLanguageTag("ru")
 private fun dateLabel(time: Long) = Instant.ofEpochMilli(time).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d MMMM yyyy", russian))
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
         setContent {
-            MaterialTheme(colorScheme = lightColorScheme(primary = Accent, onPrimary = Color.White,
-                background = Paper, surface = Paper, onSurface = Ink, onBackground = Ink, secondaryContainer = Mist)) {
+            MaterialTheme(colorScheme = GalleryColors) {
                 GalleryApp()
             }
         }
@@ -104,16 +115,30 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     val originalPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (pendingAll) { pendingAll = false; archiveModel.prepareAll() } }
     val selectColdFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) archiveModel.add(uri) }
     var pendingSource by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingContainerHash by rememberSaveable { mutableStateOf<String?>(null) }
     var restore by rememberSaveable { mutableStateOf(false) }
-    val createFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+    val fileScope = rememberCoroutineScope()
+    val createFile = rememberLauncherForActivityResult(OriginalDocumentContract()) { uri ->
         val source = pendingSource
-        if (uri != null && source != null) model.portableFile(android.net.Uri.parse(source), uri, restore)
+        if (uri != null && source != null) model.portableFile(android.net.Uri.parse(source), uri, restore, pendingContainerHash)
         pendingSource = null
+        pendingContainerHash = null
     }
     val openFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            pendingSource = uri.toString()
-            createFile.launch(if (restore) "restored-original.bin" else "original.bin")
+        pendingSource = null
+        pendingContainerHash = null
+        if (uri != null) fileScope.launch {
+            try {
+                val checked = if (restore) model.inspectRecovery(uri) else null
+                pendingSource = uri.toString()
+                pendingContainerHash = checked?.containerSha256
+                createFile.launch(checked?.let { OriginalDocument(it.name, it.mime) }
+                    ?: OriginalDocument("original.bin", "application/octet-stream"))
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) {
+                pendingSource = null; pendingContainerHash = null
+                model.message("Не удалось подготовить файл: ${e.localizedMessage}")
+            }
         }
     }
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { model.refresh() }
@@ -127,6 +152,16 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
     LaunchedEffect(Unit) { model.refresh() }
+    LaunchedEffect(state.media, state.loading) {
+        val shown = selected
+        if (!state.loading && shown?.binding != null) {
+            val current = state.media.firstOrNull { it.binding == shown.binding }
+            if (current == null) {
+                selected = null
+                model.message("Снимок изменился или доступ закрыт. Откройте его заново.")
+            } else selected = current
+        }
+    }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(state.message) {
         state.message?.let { snackbar.showSnackbar(it, duration = SnackbarDuration.Long); model.message(null) }
@@ -136,8 +171,8 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     LaunchedEffect(yandex.connection, yandex.account?.uid) { if (yandex.account != null && state.cloud?.provider != "Яндекс Диск") model.chooseCloud("Яндекс Диск")
         if (yandex.connection == YandexConnection.CONNECTED) archiveModel.accountConnected() }
     val filtered = remember(state.media, state.favorites, state.albums, folder, albumFilter, favoriteFilter) {
-        state.media.filter { item -> (folder == null || item.folder == folder) && (!favoriteFilter || item.uri.toString() in state.favorites) &&
-            (albumFilter == null || item.uri.toString() in (state.albums.firstOrNull { it.name == albumFilter }?.members ?: emptySet())) }
+        state.media.filter { item -> (folder == null || item.folder == folder) && (!favoriteFilter || state.favorites.containsMedia(item)) &&
+            (albumFilter == null || (state.albums.firstOrNull { it.name == albumFilter }?.members ?: emptySet()).containsMedia(item)) }
     }
     BackHandler(folder != null || albumFilter != null || favoriteFilter) { folder = null; albumFilter = null; favoriteFilter = false }
 
@@ -175,9 +210,12 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                     else MediaTimeline(filtered, Modifier.weight(1f), open = { selected = it })
                 }
                 Destination.ALBUMS -> LazyColumn(contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    item { CollectionCard("Избранное", "${state.favorites.size} сохранено", state.media.firstOrNull { it.uri.toString() in state.favorites }, Icons.Outlined.FavoriteBorder) { favoriteFilter = true; destination = Destination.PHOTOS } }
+                    item { CollectionCard("Избранное", collectionSummary(state.favorites, state.media), state.media.firstOrNull { state.favorites.containsMedia(it) }, Icons.Outlined.FavoriteBorder) { favoriteFilter = true; destination = Destination.PHOTOS } }
+                    if (state.favorites.any { it.startsWith("content:") } || state.albums.any { a -> a.members.any { it.startsWith("content:") } }) item {
+                        Text("Прежние записи альбомов сохранены. Добавьте нужные фото заново, чтобы подтвердить их привязку.", style = MaterialTheme.typography.bodySmall, color = Accent)
+                    }
                     if (state.albums.isNotEmpty()) item { Text("АЛЬБОМЫ", style = MaterialTheme.typography.labelMedium, color = Accent) }
-                    state.albums.forEach { a -> item { CollectionCard(a.name, "${a.members.size} файлов", state.media.firstOrNull { it.uri.toString() in a.members }, Icons.Outlined.CollectionsBookmark) { albumFilter = a.name; destination = Destination.PHOTOS } } }
+                    state.albums.forEach { a -> item { CollectionCard(a.name, collectionSummary(a.members, state.media), state.media.firstOrNull { a.members.containsMedia(it) }, Icons.Outlined.CollectionsBookmark) { albumFilter = a.name; destination = Destination.PHOTOS } } }
                     item { Text("ПАПКИ УСТРОЙСТВА", style = MaterialTheme.typography.labelMedium, color = Accent) }
                     state.media.groupBy { it.folder }.forEach { (name, members) -> item { CollectionCard(name, "${members.size} файлов", members.first(), Icons.Outlined.FolderOpen) { folder = name; destination = Destination.PHOTOS } } }
                 }
@@ -250,7 +288,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
         }
     }
 
-    selected?.let { item -> Viewer(item, item.uri.toString() in state.favorites, { selected = null }, { model.favorite(item) }, { addAlbum = true }) }
+    selected?.let { item -> Viewer(item, state.favorites.containsMedia(item), { selected = null }, { model.favorite(item) }, { addAlbum = true }) }
     if (addAlbum) {
         var name by remember { mutableStateOf("") }
         AlertDialog(onDismissRequest = { addAlbum = false }, title = { Text(if (selected == null) "Новый альбом" else "Добавить в альбом") },
@@ -331,7 +369,7 @@ private fun InfoCard(title: String, body: String, icon: ImageVector, action: Str
 
 @Composable
 private fun ZoneCard(number: String, title: String, body: String, icon: ImageVector) {
-    Surface(Modifier.fillMaxWidth().padding(horizontal = 24.dp), shape = RoundedCornerShape(24.dp), color = Color.White) {
+    Surface(Modifier.fillMaxWidth().padding(horizontal = 24.dp), shape = RoundedCornerShape(24.dp), color = Card) {
         Row(Modifier.padding(20.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Text(number, style = MaterialTheme.typography.headlineMedium, color = Accent.copy(alpha = .55f))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) { Text(title, style = MaterialTheme.typography.titleMedium); Text(body, style = MaterialTheme.typography.bodyMedium, color = Ink.copy(alpha = .75f)) }
@@ -350,7 +388,7 @@ private fun EmptyState(title: String, body: String, icon: ImageVector) {
 @Composable
 internal fun MediaThumb(item: MediaItem, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val bitmap by produceState<android.graphics.Bitmap?>(null, item.uri, item.modifiedSeconds, item.generation, item.bytes) {
+    val bitmap by produceState<android.graphics.Bitmap?>(null, item.uri, item.binding, item.modifiedSeconds, item.generation, item.bytes) {
         value = null
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching { context.contentResolver.loadThumbnail(item.uri, android.util.Size(320, 320), null) }.getOrNull()
@@ -367,7 +405,7 @@ internal fun MediaThumb(item: MediaItem, modifier: Modifier = Modifier) {
 
 @Composable
 private fun CollectionCard(title: String, subtitle: String, cover: MediaItem?, icon: ImageVector, click: () -> Unit) {
-    Surface(onClick = click, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = Color.White) {
+    Surface(onClick = click, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), color = Card) {
         Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             if (cover != null) MediaThumb(cover, Modifier.size(72.dp).clip(RoundedCornerShape(14.dp)))
             else Box(Modifier.size(72.dp).background(Mist, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Accent) }

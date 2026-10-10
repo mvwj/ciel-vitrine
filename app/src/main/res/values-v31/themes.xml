@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.CielVitrine" parent="Base.Theme.CielVitrine">
+        <item name="android:windowSplashScreenBackground">#11181C</item>
+    </style>
+</resources>

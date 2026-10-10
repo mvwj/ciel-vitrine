@@ -29,6 +29,27 @@ class MediaContentAndroidTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private fun item(file: File, mime: String, generation: Long = 1) = MediaItem(Uri.fromFile(file), file.name, mime, 0, 0, 1, "Test", file.length(), 128, 96, 0, generation=generation)
     private fun waitForLoad() { compose.waitUntil(15_000) { compose.onAllNodesWithTag("media-loading").fetchSemanticsNodes().isEmpty() } }
+    @Test fun aReusedUriWithANewBindingReloadsThePhotoEvenWithUnchangedOtherMetadata() {
+        val dir = File(context.cacheDir, "binding-viewer-${UUID.randomUUID()}").apply { mkdirs() }
+        val file = File(dir, "same.png")
+        fun writeColor(color: Int) {
+            val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888).apply { eraseColor(color) }
+            file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
+        }
+        try {
+            writeColor(android.graphics.Color.RED)
+            val first = item(file, "image/png").copy(binding = "old-row")
+            val shown = mutableStateOf(first)
+            compose.setContent { MaterialTheme { PhotoContent(shown.value, Modifier.size(128.dp)) } }
+            waitForLoad()
+            fun pixels() = compose.onNodeWithTag("photo-image").captureToImage().toPixelMap()
+            assertTrue(pixels()[32,32].red > .9f)
+            writeColor(android.graphics.Color.BLUE)
+            compose.runOnUiThread { shown.value = first.copy(binding = "new-row") }
+            waitForLoad()
+            assertTrue(pixels()[32,32].blue > .9f)
+        } finally { dir.deleteRecursively() }
+    }
     @Test fun generatedImagesOpenInTheRealViewerAndAnimationsAdvance() {
         val instrument = InstrumentationRegistry.getInstrumentation()
         val fixtures = org.json.JSONObject(instrument.context.assets.open("safety-corpus/manifest.json").bufferedReader().use { it.readText() }).getJSONArray("fixtures")

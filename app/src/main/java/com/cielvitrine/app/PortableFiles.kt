@@ -12,6 +12,12 @@ import java.io.InputStream
 import java.io.FileInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.DigestInputStream
+import java.security.MessageDigest
+import com.cielvitrine.pos.OriginalTimes
+
+data class RecoveryInspection(val name: String, val mime: String, val containerSha256: String,
+    val originalBytes: Long, val originalSha256: String, val times: OriginalTimes?)
 
 /** A user-selected file copy. Never authorizes deleting a MediaStore original. */
 object PortableFiles {
@@ -53,29 +59,51 @@ object PortableFiles {
         }
     }
 
-    fun restoreAndReadBack(context: Context, source: Uri, destination: Uri): String =
-        restoreAndReadBack(context.contentResolver, source, destination, File(context.cacheDir, "restore-staging")) { OriginalDatePolicy.restore(context, destination, it) }
+    fun inspectRecovery(resolver: ContentResolver, source: Uri): RecoveryInspection =
+        resolver.openInputStream(source)!!.use { readRecovery(it, Sink) }
+
+    private fun readRecovery(source: InputStream, output: OutputStream): RecoveryInspection {
+        val input = source.buffered()
+        input.mark(8)
+        val magic = ByteArray(8); var n = 0
+        while (n < 8) { val count = input.read(magic, n, 8 - n); if (count <= 0) break; n += count }
+        input.reset()
+        val digest = MessageDigest.getInstance("SHA-256")
+        val checked = DigestInputStream(input, digest)
+        return if (Pos2.recognizes(magic)) {
+            val result = Pos2.read(checked, output)
+            RecoveryInspection(result.name, result.mime, digest.digest().hex(), result.originalBytes, result.originalSha256, result.times)
+        } else {
+            val result = PosReader.read(checked, output)
+            check(result.header.partCount == 1 && result.header.partIndex == 0) { "Нужен полный архив, а не отдельная часть" }
+            // POSv1 did not store the filename or MIME type. Do not invent metadata.
+            RecoveryInspection("restored-original.bin", "application/octet-stream", digest.digest().hex(), result.recoveredByteLength, result.recoveredSha256Hex, null)
+        }
+    }
+
+    private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
+
+    fun restoreAndReadBack(context: Context, source: Uri, destination: Uri, expectedContainerSha256: String? = null): String =
+        restoreAndReadBack(context.contentResolver, source, destination, File(context.cacheDir, "restore-staging"), expectedContainerSha256) { OriginalDatePolicy.restore(context, destination, it) }
 
     fun restoreAndReadBack(resolver: ContentResolver, source: Uri, destination: Uri,
         stagingDirectory: File = File(System.getProperty("java.io.tmpdir"), "ciel-restore-staging"),
+        expectedContainerSha256: String? = null,
         restoreTimes: (com.cielvitrine.pos.OriginalTimes?) -> String = { "" }): String {
         ensureDistinct(resolver, source, destination)
         check(stagingDirectory.isDirectory || stagingDirectory.mkdirs()) { "Нет места для проверки восстановления" }
         val staged = File.createTempFile("original-", ".partial", stagingDirectory)
         var destinationTouched = false
         try {
-            var times: com.cielvitrine.pos.OriginalTimes? = null
-            val decoded = resolver.openInputStream(source)!!.buffered().use { input ->
-                input.mark(8)
-                val magic = ByteArray(8); var n = 0
-                while (n < 8) { val count = input.read(magic, n, 8 - n); if (count <= 0) break; n += count }
-                input.reset()
+            val decoded = resolver.openInputStream(source)!!.use { input ->
                 FileOutputStream(staged).use { output ->
-                    val result = if (Pos2.recognizes(magic)) Pos2.read(input, output).let { times = it.times; it.originalBytes to it.originalSha256 }
-                    else PosReader.read(input, output).let { it.recoveredByteLength to it.recoveredSha256Hex }
+                    val result = readRecovery(input, output)
                     output.fd.sync()
                     result
                 }
+            }
+            check(expectedContainerSha256 == null || decoded.containerSha256 == expectedContainerSha256) {
+                "Архив изменился после выбора. Выберите его заново."
             }
             // No destination is opened/truncated until the complete authenticated footer passes.
             ensureDistinct(resolver, source, destination)
@@ -95,8 +123,8 @@ object PortableFiles {
                 }
             }
             val hash = digest.digest().joinToString("") { "%02x".format(it) }
-            check(length == decoded.first && hash == decoded.second) { "Сохранённый файл отличается от архива" }
-            return "Файл восстановлен и прочитан обратно. $length байт, SHA-256 совпал. ${restoreTimes(times)}"
+            check(length == decoded.originalBytes && hash == decoded.originalSha256) { "Сохранённый файл отличается от архива" }
+            return "Файл восстановлен и прочитан обратно. $length байт, SHA-256 совпал. ${restoreTimes(decoded.times)}"
         } catch (e: Exception) {
             if (destinationTouched) runCatching {
                 ensureDistinct(resolver, source, destination)
