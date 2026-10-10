@@ -63,6 +63,16 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - name: Compile SDK baseline
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - name: Free unused SDK toolchains on the disposable runner
+        shell: bash
+        run: |
+          for toolchain in "$ANDROID_HOME"/ndk/*; do
+            version="${toolchain##*/}"
+            if [[ -d "$toolchain" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$version" != "28.2.13676358" ]]; then
+              sdkmanager --uninstall "ndk;$version"
+            fi
+          done
+          df -h .
       - name: Generate private test media
         run: |
           python -m pip install -r requirements-safety.txt
@@ -84,7 +94,6 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_6
-          disk-size: 2048M
           ram-size: 2048M
           disable-animations: true
           script: bash gradlew :app:connectedDebugAndroidTest --console=plain
