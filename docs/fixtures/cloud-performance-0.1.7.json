@@ -1,0 +1,45 @@
+{
+  "sdk": 36,
+  "model": "Android test device",
+  "trials": [
+    {
+      "trial": 1,
+      "original_bytes": 3192662,
+      "prepare_ms": 1293.070832,
+      "upload_ms": 28452.919416,
+      "verification_ms": 3746.261041,
+      "download_ms": 1339.749531,
+      "restore_and_verify_ms": 55.869427,
+      "local_decode_ms": 44.149844,
+      "container_bytes": 3196810,
+      "sha256": "[PRIVATE_FIXTURE_HASH_REMOVED]",
+      "result": "PASS"
+    },
+    {
+      "trial": 2,
+      "original_bytes": 3192662,
+      "prepare_ms": 667.097136,
+      "upload_ms": 28353.658166,
+      "verification_ms": 4386.912707,
+      "download_ms": 1017.99302,
+      "restore_and_verify_ms": 49.887968,
+      "local_decode_ms": 41.867656,
+      "container_bytes": 3196810,
+      "sha256": "[PRIVATE_FIXTURE_HASH_REMOVED]",
+      "result": "PASS"
+    },
+    {
+      "trial": 3,
+      "original_bytes": 3192662,
+      "prepare_ms": 715.926874,
+      "upload_ms": 27715.101604,
+      "verification_ms": 3528.307863,
+      "download_ms": 1156.68526,
+      "restore_and_verify_ms": 71.785625,
+      "local_decode_ms": 43.990625,
+      "container_bytes": 3196810,
+      "sha256": "[PRIVATE_FIXTURE_HASH_REMOVED]",
+      "result": "PASS"
+    }
+  ]
+}
