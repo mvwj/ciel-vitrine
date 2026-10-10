@@ -15,9 +15,6 @@ import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
-import java.nio.file.Files
-import java.nio.file.attribute.FileTime
-import java.time.Instant
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -70,8 +67,9 @@ class MediaSafetyAndroidTest {
                 instrument.context.assets.open("safety-corpus/$name").use { input -> source.outputStream().use { input.copyTo(it) } }
                 val original = source.readBytes(); assertEquals(f.getString("sha256"), hash(original))
                 val before = appearance(source, f)
-                Files.setLastModifiedTime(source.toPath(), FileTime.from(Instant.ofEpochSecond(1500000000L + index, 987654000)))
+                context.contentResolver.openFileDescriptor(Uri.fromFile(source),"rw")!!.use { NativeFileTimes.setModified(it.fd,1500000000L+index,987654321) }
                 val sourceTime = Os.stat(source.path).st_mtim
+                assertEquals(987654321L,sourceTime.tv_nsec)
                 val container = File(scope, "$name.bin").apply { createNewFile() }
                 PortableFiles.packAndReadBack(context, Uri.fromFile(source), Uri.fromFile(container))
                 val proof = container.inputStream().use { Pos2.read(it, com.cielvitrine.archive.ColdArchive.Sink, original.size.toLong(), hash(original)) }

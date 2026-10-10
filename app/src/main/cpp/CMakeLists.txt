@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(ciel_times C)
+add_library(ciel_times SHARED file_times.c)
+target_compile_features(ciel_times PRIVATE c_std_11)
+target_compile_options(ciel_times PRIVATE -Wall -Wextra -Werror)

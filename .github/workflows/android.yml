@@ -25,7 +25,7 @@ jobs:
           cmdline-tools-version: '12266719'
           log-accepted-android-sdk-licenses: false
       - name: SDK baseline
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
       - name: JVM tests, APK and lint
         run: bash gradlew test :app:assembleDebug :app:lintDebug --console=plain
       - name: Independent offline original recovery
@@ -62,7 +62,7 @@ jobs:
           cmdline-tools-version: '12266719'
           log-accepted-android-sdk-licenses: false
       - name: Compile SDK baseline
-        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
       - name: Generate private test media
         run: |
           python -m pip install -r requirements-safety.txt

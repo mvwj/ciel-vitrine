@@ -9,10 +9,6 @@ import android.system.OsConstants
 import com.cielvitrine.pos.OriginalTimes
 import java.io.FileInputStream
 import java.io.InputStream
-import java.nio.file.Files
-import java.nio.file.Paths
-import java.nio.file.attribute.FileTime
-import java.time.Instant
 
 internal object OriginalDatePolicy {
     fun capture(context: Context, uri: Uri, input: InputStream): OriginalTimes {
@@ -39,11 +35,12 @@ internal object OriginalDatePolicy {
         val seconds = times.modifiedSeconds ?: return "Исходные доступные даты сохранены в контейнере; дата изменения источника неизвестна."
         val nanos = times.modifiedNanos!!.toLong()
         return try {
-            context.contentResolver.openFileDescriptor(destination, "rw")!!.use { fd ->
+            val actual = context.contentResolver.openFileDescriptor(destination, "rw")!!.use { fd ->
                 val stat = Os.fstat(fd.fileDescriptor); require(OsConstants.S_ISREG(stat.st_mode))
-                Files.setLastModifiedTime(Paths.get("/proc/self/fd/${fd.fd}"), FileTime.from(Instant.ofEpochSecond(seconds, nanos)))
+                NativeFileTimes.setModified(fd.fd, seconds, nanos.toInt())
+                Os.fsync(fd.fileDescriptor)
+                Os.fstat(fd.fileDescriptor).st_mtim
             }
-            val actual = context.contentResolver.openFileDescriptor(destination, "r")!!.use { Os.fstat(it.fileDescriptor).st_mtim }
             if (actual.tv_sec == seconds && actual.tv_nsec == nanos)
                 "Исходная дата изменения файла восстановлена и проверена. Исходные даты добавления/создания сохранены в контейнере, если были известны."
             else "Исходные даты сохранены в контейнере; папка назначения изменила дату файла или её точность."

@@ -8,6 +8,8 @@ val yandexClientId = "00000000000000000000000000000000"
 android {
     namespace = "com.cielvitrine.app"
     compileSdk = 36
+    ndkVersion = "28.2.13676358"
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
     defaultConfig {
         applicationId = "com.cielvitrine.app"
         minSdk = 29
