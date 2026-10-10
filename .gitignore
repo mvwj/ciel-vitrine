@@ -38,3 +38,4 @@ artifacts/
 emulator-*.log
 
 app/src/androidTest/assets/photo-corpus/
+app/src/androidTest/assets/safety-corpus/

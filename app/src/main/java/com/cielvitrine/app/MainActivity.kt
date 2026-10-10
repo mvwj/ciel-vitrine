@@ -34,21 +34,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import androidx.media3.common.MediaItem as PlayerMediaItem
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
-import coil3.ImageLoader
-import coil3.compose.AsyncImage
-import coil3.gif.AnimatedImageDecoder
-import coil3.request.ImageRequest
-import coil3.request.crossfade
-import coil3.request.CachePolicy
 import com.yandex.authsdk.YandexAuthLoginOptions
 import com.yandex.authsdk.YandexAuthOptions
 import com.yandex.authsdk.YandexAuthSdk
@@ -360,7 +350,8 @@ private fun EmptyState(title: String, body: String, icon: ImageVector) {
 @Composable
 internal fun MediaThumb(item: MediaItem, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val bitmap by produceState<android.graphics.Bitmap?>(null, item.uri) {
+    val bitmap by produceState<android.graphics.Bitmap?>(null, item.uri, item.modifiedSeconds, item.generation, item.bytes) {
+        value = null
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching { context.contentResolver.loadThumbnail(item.uri, android.util.Size(320, 320), null) }.getOrNull()
         }
@@ -403,35 +394,17 @@ private fun Viewer(item: MediaItem, favorite: Boolean, close: () -> Unit, toggle
                 }
             }
         }) { inset ->
-            if (item.isVideo) Video(item, Modifier.fillMaxSize().padding(inset))
+            if (item.isVideo) VideoContent(item, Modifier.fillMaxSize().padding(inset))
             else {
-                val context = LocalContext.current
-                val loader = remember { ImageLoader.Builder(context).diskCache(null).components { add(AnimatedImageDecoder.Factory()) }.build() }
-                DisposableEffect(loader) { onDispose { loader.shutdown() } }
                 var scale by remember(item.uri) { mutableFloatStateOf(1f) }
                 var x by remember(item.uri) { mutableFloatStateOf(0f) }
                 var y by remember(item.uri) { mutableFloatStateOf(0f) }
                 Box(Modifier.fillMaxSize().padding(inset).clip(RoundedCornerShape(0.dp)).pointerInput(item.uri) {
                     detectTransformGestures { _, pan, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 5f); x = if (scale == 1f) 0f else x + pan.x; y = if (scale == 1f) 0f else y + pan.y }
                 }, contentAlignment = Alignment.Center) {
-                    AsyncImage(model = ImageRequest.Builder(context).data(item.uri).diskCachePolicy(CachePolicy.DISABLED).crossfade(true).build(), imageLoader = loader,
-                        contentDescription = item.name, modifier = Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = x, translationY = y), contentScale = ContentScale.Fit)
+                    PhotoContent(item, Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = x, translationY = y))
                 }
             }
         }
     }
-}
-
-@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-@Composable
-private fun Video(item: MediaItem, modifier: Modifier) {
-    val context = LocalContext.current
-    val player = remember(item.uri) { ExoPlayer.Builder(context).build().apply { setMediaItem(PlayerMediaItem.fromUri(item.uri)); prepare() } }
-    val owner = LocalLifecycleOwner.current
-    DisposableEffect(player, owner) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_PAUSE) player.pause() }
-        owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer); player.release() }
-    }
-    AndroidView(factory = { PlayerView(it).apply { this.player = player } }, modifier = modifier)
 }

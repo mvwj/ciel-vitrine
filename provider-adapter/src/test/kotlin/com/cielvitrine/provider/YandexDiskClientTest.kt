@@ -21,7 +21,7 @@ class YandexDiskClientTest {
             val body = """{"type":"file","path":"app:/original.bin","resource_id":"object","size":25,"modified":"v1"}"""
             server.enqueue(MockResponse().setBody(body).setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY))
             server.enqueue(MockResponse().setBody(body))
-            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient.Builder().retryOnConnectionFailure(false).build())
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/").newBuilder().host("127.0.0.1").build(), OkHttpClient.Builder().retryOnConnectionFailure(false).build())
             assertEquals("object", client.inspect("app:/original.bin").resource!!.objectId)
             val requests = List(2) { server.takeRequest() }
             assertTrue(requests.all { it.method == "GET" && it.getHeader("Authorization") == "OAuth test-token" })
@@ -33,7 +33,7 @@ class YandexDiskClientTest {
         MockWebServer().use { server ->
             server.start(java.net.InetAddress.getByName("127.0.0.1"), 0)
             repeat(2) { server.enqueue(MockResponse().setBody("{}      ").setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)) }
-            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient.Builder().retryOnConnectionFailure(false).build())
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/").newBuilder().host("127.0.0.1").build(), OkHttpClient.Builder().retryOnConnectionFailure(false).build())
             assertThrows(IOException::class.java) { client.inspect("app:/original.bin") }
             assertEquals(2, server.requestCount)
         }

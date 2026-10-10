@@ -1,0 +1,135 @@
+{
+  "generator": "Ciel Vitrine owned synthetic corpus",
+  "fixtures": [
+    {
+      "name": "orientation-1.jpg",
+      "mime": "image/jpeg",
+      "kind": "image",
+      "bytes": 1775,
+      "sha256": "93c618be48c296ad5c7f60c4c2cb1f2a99aa267fbf0e7c291f1113904b1e198e",
+      "width": 128,
+      "height": 96,
+      "orientation": 1
+    },
+    {
+      "name": "orientation-6.jpg",
+      "mime": "image/jpeg",
+      "kind": "image",
+      "bytes": 1775,
+      "sha256": "e207c1f8d6c5d4057635fb5dac1dc53feede3af317445c9c1694d326607a3c14",
+      "width": 96,
+      "height": 128,
+      "orientation": 6
+    },
+    {
+      "name": "orientation-8.jpg",
+      "mime": "image/jpeg",
+      "kind": "image",
+      "bytes": 1775,
+      "sha256": "6b8c5474c5866508a68209fba7994bd532280f16e0e79b58aaaa5d7d6cf13c0b",
+      "width": 96,
+      "height": 128,
+      "orientation": 8
+    },
+    {
+      "name": "alpha.png",
+      "mime": "image/png",
+      "kind": "image",
+      "bytes": 715,
+      "sha256": "6453d4ffab0ee979afcbbc7046a1d524b40ef1df609d7e4af67337f55f5fff6b",
+      "width": 128,
+      "height": 96,
+      "alpha": true
+    },
+    {
+      "name": "lossless.webp",
+      "mime": "image/webp",
+      "kind": "image",
+      "bytes": 74,
+      "sha256": "a622be1b39104f3c15f196e3a823151d640ccc0fc50bdad74d0b217b210cd9bc",
+      "width": 128,
+      "height": 96
+    },
+    {
+      "name": "lossy.webp",
+      "mime": "image/webp",
+      "kind": "image",
+      "bytes": 232,
+      "sha256": "2fe3076ac68bb7b087a08559409793dad06b038dd575b70399b6789681bf46c1",
+      "width": 128,
+      "height": 96
+    },
+    {
+      "name": "animated.gif",
+      "mime": "image/gif",
+      "kind": "image",
+      "bytes": 1155,
+      "sha256": "aeb8d5d2232ec254b6afa09c47f54fd4849e70cf07123abe22798cd76e800cca",
+      "width": 128,
+      "height": 96,
+      "animated": true
+    },
+    {
+      "name": "animated.webp",
+      "mime": "image/webp",
+      "kind": "image",
+      "bytes": 228,
+      "sha256": "5849f79ab260cab033c193388c62da2cff4d704e177077522fd89ffbf9420c6c",
+      "width": 128,
+      "height": 96,
+      "animated": true
+    },
+    {
+      "name": "modern.avif",
+      "mime": "image/avif",
+      "kind": "image",
+      "bytes": 1037,
+      "sha256": "c09606ff35e7fed5eb513a011644e2db85f6d15b2069f99eb9c522c17ce4df82",
+      "width": 128,
+      "height": 96
+    },
+    {
+      "name": "modern.heic",
+      "mime": "image/heic",
+      "kind": "image",
+      "bytes": 1352,
+      "sha256": "12e9f1212112e0211daaaf5da8a1c1ac50b4e0cd99e20d428b71fc9bf2ee15a8",
+      "width": 128,
+      "height": 96
+    },
+    {
+      "name": "archive-only.tiff",
+      "mime": "image/tiff",
+      "kind": "archive-only",
+      "bytes": 1650,
+      "sha256": "0af50b748a5f607fd46bdd7f152e20917d48906ffc1007455f065a11b0755ea8"
+    },
+    {
+      "name": "h264.mp4",
+      "mime": "video/mp4",
+      "kind": "video",
+      "bytes": 24908,
+      "sha256": "c64088d6b1418909131e8f2f8f39769faa8d3d5ab69a45f936787208d25348ad",
+      "width": 160,
+      "height": 96
+    },
+    {
+      "name": "hevc.mp4",
+      "mime": "video/mp4",
+      "kind": "video",
+      "bytes": 16525,
+      "sha256": "2ef962cb5921e5a05ff194caed5f8f916decdb90a5cb822102986290c6190629",
+      "width": 160,
+      "height": 96
+    },
+    {
+      "name": "av1.mp4",
+      "mime": "video/mp4",
+      "kind": "video",
+      "bytes": 6820,
+      "sha256": "acfb5c3bd9620c55bb85e06a93027c158e82903e4422b8d221930f9d86c558ad",
+      "width": 160,
+      "height": 96
+    }
+  ]
+}

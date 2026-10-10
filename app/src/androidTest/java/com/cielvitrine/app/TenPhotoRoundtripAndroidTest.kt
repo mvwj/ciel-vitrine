@@ -43,6 +43,7 @@ class TenPhotoRoundtripAndroidTest {
         finally { remote.listFiles()?.forEach { it.delete() }; remote.delete() }
     }
     @Test fun tenPhotographsOnRealYandexWhenAccountHasBeenConnected() {
+        assumeTrue("Real cloud tests require an explicit real_cloud argument", InstrumentationRegistry.getArguments().getString("real_cloud") == "true")
         val saved = YandexSessionStore(context).load()
         println("CIEL_YANDEX_CONNECTED=${saved != null && !saved.appRootId.isNullOrBlank()}")
         assumeTrue("Real Yandex account is not connected; no real-cloud claim", saved != null && !saved.appRootId.isNullOrBlank())

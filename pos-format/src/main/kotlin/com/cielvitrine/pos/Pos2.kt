@@ -54,8 +54,9 @@ object Pos2 {
         val key = ByteArray(32).also(random::nextBytes)
         val noncePrefix = ByteArray(4).also(random::nextBytes)
         val bundleId = ByteArray(16).also(random::nextBytes).hex()
-        val safeName = name.take(1024)
-        val safeMime = mime.take(256)
+        require(name.length <= 1024 && mime.length <= 256) { "Original metadata exceeds format limits; truncation is forbidden" }
+        val safeName = name
+        val safeMime = mime
         val metadata = buildJsonObject {
             put("format", if (times == null) "CVPOS2" else "CVPOS3"); put("version", if (times == null) 2 else 3); put("cipher", "AES-256-GCM")
             put("key_hex", key.hex()); put("nonce_prefix_hex", noncePrefix.hex()); put("bundle_id", bundleId)

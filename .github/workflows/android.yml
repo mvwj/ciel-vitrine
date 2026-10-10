@@ -44,3 +44,53 @@ jobs:
         with:
           name: ciel-vitrine-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+  android-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: android-actions/setup-android@v4
+        with:
+          cmdline-tools-version: '12266719'
+          log-accepted-android-sdk-licenses: false
+      - name: Compile SDK baseline
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Generate private test media
+        run: |
+          python -m pip install -r requirements-safety.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          python scripts/prepare-safety-corpus.py
+      - name: Prepare pinned public JPEGs
+        shell: pwsh
+        run: ./scripts/prepare-photo-corpus.ps1
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Android API 35 safety and viewer tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: bash gradlew :app:connectedDebugAndroidTest --console=plain
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-safety-reports
+          path: |
+            app/build/outputs/androidTest-results/
+            app/build/reports/androidTests/
+          if-no-files-found: ignore

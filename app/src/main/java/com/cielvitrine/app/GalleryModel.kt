@@ -28,6 +28,7 @@ data class MediaItem(
     val uri: Uri, val name: String, val mime: String, val date: Long,
     val addedSeconds: Long, val id: Long, val folder: String,
     val bytes: Long, val width: Int, val height: Int, val duration: Long,
+    val modifiedSeconds: Long = 0, val generation: Long? = null,
 ) { val isVideo get() = mime.startsWith("video/") }
 
 enum class MediaAccess { NONE, SELECTED, FULL, MIXED }
@@ -94,7 +95,8 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
      * Media bytes and thumbnails are loaded only for visible cells. */
     internal fun queryLibrary(checkCancelled: () -> Unit = {}): List<MediaItem> {
         if (access() == MediaAccess.NONE) return emptyList()
-        val columns = arrayOf("_id", "volume_name", "_display_name", "mime_type", "date_added", "bucket_display_name", "_size", "width", "height", "duration", "datetaken", "date_modified")
+        val columns = arrayOf("_id", "volume_name", "_display_name", "mime_type", "date_added", "bucket_display_name", "_size", "width", "height", "duration", "datetaken", "date_modified") +
+            if (Build.VERSION.SDK_INT >= 30) arrayOf("generation_modified") else emptyArray()
         val selection = "media_type IN (1,3) AND is_pending=0" + if (Build.VERSION.SDK_INT >= 30) " AND is_trashed=0" else ""
         val query = Bundle().apply {
             putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
@@ -111,7 +113,8 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
                 items += MediaItem(ContentUris.withAppendedId(MediaStore.Files.getContentUri(shared(c.getString(1))), id),
                     c.getString(2) ?: "Без имени", shared(c.getString(3) ?: "application/octet-stream"),
                     galleryDate(if (c.isNull(10)) null else c.getLong(10), if (c.isNull(11)) null else c.getLong(11), added),
-                    added, id, shared(c.getString(5) ?: "Другие"), c.getLong(6), c.getInt(7), c.getInt(8), c.getLong(9))
+                    added, id, shared(c.getString(5) ?: "Другие"), c.getLong(6), c.getInt(7), c.getInt(8), c.getLong(9),
+                    c.getLong(11), if (Build.VERSION.SDK_INT >= 30 && !c.isNull(12)) c.getLong(12) else null)
             }
         } ?: error("Медиатека недоступна")
         return items.sortedWith(compareByDescending<MediaItem> { it.date }.thenByDescending { it.addedSeconds }.thenBy { it.uri.toString() })

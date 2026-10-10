@@ -10,6 +10,8 @@ import android.provider.OpenableColumns
 import java.io.OutputStream
 import java.io.InputStream
 import java.io.FileInputStream
+import java.io.File
+import java.io.FileOutputStream
 
 /** A user-selected file copy. Never authorizes deleting a MediaStore original. */
 object PortableFiles {
@@ -22,13 +24,17 @@ object PortableFiles {
         openSource: () -> InputStream = { resolver.openInputStream(source) ?: error("Source unavailable") }): String = openSource().use { sourceInput ->
         // Outside cleanup: an alias rejection must never delete the source through its destination URI.
         ensureDistinct(resolver, source, destination, sourceInput)
+        requireEmptyDestination(resolver, destination)
         try {
             val times = captureTimes(sourceInput)
-            val name = resolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            val name = if (source.scheme == "file") File(source.path!!).name else resolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
                 if (c.moveToFirst()) c.getString(0) else null
             } ?: "original.bin"
+            val mime = resolver.getType(source) ?: if (source.scheme == "file")
+                android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(File(source.path!!).extension.lowercase(java.util.Locale.ROOT)) ?: "application/octet-stream"
+            else "application/octet-stream"
             val written = resolver.openOutputStream(destination, "wt")!!.use { output ->
-                Pos2.write(sourceInput, output, name, resolver.getType(source) ?: "application/octet-stream", times = times)
+                Pos2.write(sourceInput, output, name, mime, times = times)
             }
             val digest = java.security.MessageDigest.getInstance("SHA-256"); var bytes = 0L
             openSource().use { again -> check(captureTimes(again) == times) { "Исходные даты изменились во время экспорта" }; val buffer = ByteArray(65536)
@@ -48,11 +54,15 @@ object PortableFiles {
     }
 
     fun restoreAndReadBack(context: Context, source: Uri, destination: Uri): String =
-        restoreAndReadBack(context.contentResolver, source, destination) { OriginalDatePolicy.restore(context, destination, it) }
+        restoreAndReadBack(context.contentResolver, source, destination, File(context.cacheDir, "restore-staging")) { OriginalDatePolicy.restore(context, destination, it) }
 
     fun restoreAndReadBack(resolver: ContentResolver, source: Uri, destination: Uri,
+        stagingDirectory: File = File(System.getProperty("java.io.tmpdir"), "ciel-restore-staging"),
         restoreTimes: (com.cielvitrine.pos.OriginalTimes?) -> String = { "" }): String {
         ensureDistinct(resolver, source, destination)
+        check(stagingDirectory.isDirectory || stagingDirectory.mkdirs()) { "Нет места для проверки восстановления" }
+        val staged = File.createTempFile("original-", ".partial", stagingDirectory)
+        var destinationTouched = false
         try {
             var times: com.cielvitrine.pos.OriginalTimes? = null
             val decoded = resolver.openInputStream(source)!!.buffered().use { input ->
@@ -60,11 +70,18 @@ object PortableFiles {
                 val magic = ByteArray(8); var n = 0
                 while (n < 8) { val count = input.read(magic, n, 8 - n); if (count <= 0) break; n += count }
                 input.reset()
-                resolver.openOutputStream(destination, "wt")!!.use { output ->
-                    if (Pos2.recognizes(magic)) Pos2.read(input, output).let { times = it.times; it.originalBytes to it.originalSha256 }
+                FileOutputStream(staged).use { output ->
+                    val result = if (Pos2.recognizes(magic)) Pos2.read(input, output).let { times = it.times; it.originalBytes to it.originalSha256 }
                     else PosReader.read(input, output).let { it.recoveredByteLength to it.recoveredSha256Hex }
+                    output.fd.sync()
+                    result
                 }
             }
+            // No destination is opened/truncated until the complete authenticated footer passes.
+            ensureDistinct(resolver, source, destination)
+            requireEmptyDestination(resolver, destination)
+            destinationTouched = true
+            resolver.openOutputStream(destination, "wt")!!.use { output -> staged.inputStream().use { it.copyTo(output) } }
             val digest = java.security.MessageDigest.getInstance("SHA-256")
             var length = 0L
             resolver.openInputStream(destination)!!.use { input ->
@@ -81,14 +98,27 @@ object PortableFiles {
             check(length == decoded.first && hash == decoded.second) { "Сохранённый файл отличается от архива" }
             return "Файл восстановлен и прочитан обратно. $length байт, SHA-256 совпал. ${restoreTimes(times)}"
         } catch (e: Exception) {
-            runCatching { DocumentsContract.deleteDocument(resolver, destination) }
+            if (destinationTouched) runCatching {
+                ensureDistinct(resolver, source, destination)
+                when {
+                    destination.scheme == "file" -> check(File(destination.path!!).delete())
+                    destination.authority == android.provider.MediaStore.AUTHORITY -> check(resolver.delete(destination, null, null) == 1)
+                    else -> DocumentsContract.deleteDocument(resolver, destination)
+                }
+            }
             throw e
-        }
+        } finally { staged.delete() }
     }
 
     private object Sink : OutputStream() {
         override fun write(b: Int) {}
         override fun write(b: ByteArray, off: Int, len: Int) {}
+    }
+
+    private fun requireEmptyDestination(resolver: ContentResolver, destination: Uri) {
+        resolver.openInputStream(destination)!!.use { input ->
+            check(input.read() == -1) { "Выберите новый пустой файл: существующий файл нельзя перезаписывать" }
+        }
     }
 
     private fun ensureDistinct(resolver: ContentResolver, source: Uri, destination: Uri, sourceInput: InputStream? = null) {

@@ -10,6 +10,18 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 class Pos2Test {
+    @Test fun `original unicode name and mime are exact and oversized metadata is rejected before output`() {
+        val name = "Фото 🌌 \"лето\".heic"; val mime = "image/heic"
+        val output = ByteArrayOutputStream()
+        Pos2.write(bytes(1).inputStream(), output, name, mime)
+        val restored = Pos2.read(output.toByteArray().inputStream(), ByteArrayOutputStream())
+        assertEquals(name, restored.name); assertEquals(mime, restored.mime)
+        listOf("x".repeat(1025) to mime, name to "x".repeat(257)).forEach { (invalidName, invalidMime) ->
+            val untouched = ByteArrayOutputStream()
+            assertThrows(IllegalArgumentException::class.java) { Pos2.write(bytes(1).inputStream(), untouched, invalidName, invalidMime) }
+            assertEquals(0, untouched.size())
+        }
+    }
     private fun bytes(size: Int) = ByteArray(size) { (it * 37 + 11).toByte() }
     private fun pack(original: ByteArray) = ByteArrayOutputStream().also {
         Pos2.write(original.inputStream(), it, "HDR original.heic", "image/heic", expectedBytes = original.size.toLong(), chunkBytes = 65536)
