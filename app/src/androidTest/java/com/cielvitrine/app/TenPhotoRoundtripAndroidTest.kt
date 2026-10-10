@@ -1,6 +1,9 @@
 package com.cielvitrine.app
 
 import android.net.Uri
+import android.os.Bundle
+import android.view.WindowManager
+import androidx.test.core.app.ActivityScenario
 import android.media.ExifInterface
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -43,9 +46,25 @@ class TenPhotoRoundtripAndroidTest {
         val saved = YandexSessionStore(context).load()
         println("CIEL_YANDEX_CONNECTED=${saved != null && !saved.appRootId.isNullOrBlank()}")
         assumeTrue("Real Yandex account is not connected; no real-cloud claim", saved != null && !saved.appRootId.isNullOrBlank())
-        val cloud = YandexArchiveCloud(context, saved!!)
-        cloud.requireAccount(saved.uid, saved.appRootId!!)
-        exercise(cloud, saved.uid, saved.appRootId!!, "real-yandex")
+        ActivityScenario.launch(MainActivity::class.java).use { activity ->
+            // Some phone vendors kill background instrumentation; this is a temporary test window flag.
+            activity.onActivity { it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            val provider = YandexArchiveCloud(context, saved!!)
+            fun <T> request(name: String, work: () -> T): T {
+                instrument.sendStatus(2, Bundle().apply { putString("ciel_network", "$name:start") })
+                return work().also { instrument.sendStatus(2, Bundle().apply { putString("ciel_network", "$name:complete") }) }
+            }
+            val cloud = object : ArchiveCloud {
+                override fun requireAccount(uid: String, rootId: String) = request("account") { provider.requireAccount(uid, rootId) }
+                override fun ensureColdFolders() = request("cold-folders") { provider.ensureColdFolders() }
+                override fun ensureGalleryFolders() = request("gallery-folders") { provider.ensureGalleryFolders() }
+                override fun inspect(path: String) = request("metadata") { provider.inspect(path) }
+                override fun uploadNew(path: String, bytes: Long, open: () -> InputStream) = request("upload") { provider.uploadNew(path, bytes, open) }
+                override fun <T> readback(path: String, read: (InputStream) -> T): T = request("download") { provider.readback(path, read) }
+            }
+            cloud.requireAccount(saved.uid, saved.appRootId!!)
+            exercise(cloud, saved.uid, saved.appRootId!!, "real-yandex")
+        }
     }
     private fun exercise(cloud: ArchiveCloud, uid: String, root: String, mode: String) {
         val fixtures = instrument.context.assets.list("photo-corpus")!!.filter { it.endsWith(".jpg") }.sorted()
@@ -60,6 +79,13 @@ class TenPhotoRoundtripAndroidTest {
         val staging = AndroidArchiveStaging(context, store = journal, cloud = cloud)
         val report = File(context.filesDir, "roundtrip-$mode.csv")
         report.writeText("name,bytes,sha256,mtime_seconds,mtime_nanos,cold_path,gallery_path,result\n")
+        fun steps(engine: ColdArchive, id: String, name: String) {
+            repeat(3) {
+                instrument.sendStatus(2, Bundle().apply { putString("ciel_photo", name); putString("ciel_phase", "${journal.load(id).zone}:start:${journal.load(id).phase}") })
+                engine.step(id)
+                instrument.sendStatus(2, Bundle().apply { putString("ciel_photo", name); putString("ciel_phase", "${journal.load(id).zone}:complete:${journal.load(id).phase}") })
+            }
+        }
         try { fixtures.forEachIndexed { index, name ->
             val original = File(scope, name)
             instrument.context.assets.open("photo-corpus/$name").use { input -> original.outputStream().use { input.copyTo(it) } }
@@ -74,7 +100,7 @@ class TenPhotoRoundtripAndroidTest {
             val observedTime = android.system.Os.stat(original.path).st_mtim
             val cold = ArchiveJob(ArchiveStore.randomId(), uid, root, Uri.fromFile(original).toString(), name, "image/jpeg", original.length(), containerExtension = ContainerExtension.BIN)
             jobs[cold.id] = cold; val engine = ColdArchive(journal, staging, cloud)
-            repeat(3) { engine.step(cold.id) }; val archived = journal.load(cold.id)
+            steps(engine, cold.id, name); val archived = journal.load(cold.id)
             assertEquals(ArchivePhase.VERIFIED, archived.phase)
             val afterPacking = android.system.Os.stat(original.path).st_mtim
             assertEquals(observedTime.tv_sec, afterPacking.tv_sec); assertEquals(observedTime.tv_nsec, afterPacking.tv_nsec)
@@ -86,7 +112,7 @@ class TenPhotoRoundtripAndroidTest {
             group = ResourceGroup(groupId, listOf(cold.id), true, name, listOf(galleryId))
             val working = ArchiveJob(galleryId, uid, root, cold.source, name, "image/jpeg", archived.proof!!.originalBytes,
                 zone = OriginalZone.GALLERY, groupId = groupId, coldId = cold.id, containerExtension = ContainerExtension.BIN)
-            jobs[working.id] = working; repeat(3) { engine.step(working.id) }
+            jobs[working.id] = working; steps(engine, working.id, name)
             val ready = journal.load(working.id); assertEquals(ArchivePhase.VERIFIED, ready.phase)
             assertEquals(archived.proof!!.times, ready.proof!!.times)
             for (copy in listOf(archived, ready)) {

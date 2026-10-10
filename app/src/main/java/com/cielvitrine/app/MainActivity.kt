@@ -15,10 +15,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -67,7 +63,6 @@ private val Mist = Color(0xFFE5ECEB)
 private val Accent = Color(0xFF53746F)
 private val russian = Locale.forLanguageTag("ru")
 private fun dateLabel(time: Long) = Instant.ofEpochMilli(time).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d MMMM yyyy", russian))
-private fun monthLabel(time: Long) = Instant.ofEpochMilli(time).atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("LLLL yyyy", russian)).replaceFirstChar { it.titlecase(russian) }
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -187,15 +182,14 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                         FilterChip(selected = favoriteFilter, onClick = { favoriteFilter = !favoriteFilter }, label = { Text("Избранное") }, leadingIcon = { Icon(Icons.Outlined.FavoriteBorder, null, Modifier.size(16.dp)) })
                     }
                     if (filtered.isEmpty() && state.access != MediaAccess.NONE && !state.loading) EmptyState("Здесь будут ваши снимки", "Добавьте фото на телефон или измените выбранный доступ.", Icons.Outlined.Photo)
-                    else MediaGrid(filtered, state.hasMore, { model.more() }) { selected = it }
+                    else MediaTimeline(filtered, Modifier.weight(1f), open = { selected = it })
                 }
                 Destination.ALBUMS -> LazyColumn(contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     item { CollectionCard("Избранное", "${state.favorites.size} сохранено", state.media.firstOrNull { it.uri.toString() in state.favorites }, Icons.Outlined.FavoriteBorder) { favoriteFilter = true; destination = Destination.PHOTOS } }
                     if (state.albums.isNotEmpty()) item { Text("АЛЬБОМЫ", style = MaterialTheme.typography.labelMedium, color = Accent) }
                     state.albums.forEach { a -> item { CollectionCard(a.name, "${a.members.size} файлов", state.media.firstOrNull { it.uri.toString() in a.members }, Icons.Outlined.CollectionsBookmark) { albumFilter = a.name; destination = Destination.PHOTOS } } }
                     item { Text("ПАПКИ УСТРОЙСТВА", style = MaterialTheme.typography.labelMedium, color = Accent) }
-                    state.media.groupBy { it.folder }.forEach { (name, members) -> item { CollectionCard(name, "${members.size} в загруженной части списка", members.first(), Icons.Outlined.FolderOpen) { folder = name; destination = Destination.PHOTOS } } }
-                    if (state.hasMore) item { OutlinedButton(onClick = { model.more() }) { Text("Загрузить следующие файлы") } }
+                    state.media.groupBy { it.folder }.forEach { (name, members) -> item { CollectionCard(name, "${members.size} файлов", members.first(), Icons.Outlined.FolderOpen) { folder = name; destination = Destination.PHOTOS } } }
                 }
                 Destination.CLOUD -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (state.cloud?.provider != "Google Drive" || yandex.account != null) item {
@@ -364,20 +358,7 @@ private fun EmptyState(title: String, body: String, icon: ImageVector) {
 }
 
 @Composable
-private fun MediaGrid(media: List<MediaItem>, hasMore: Boolean, more: () -> Unit, open: (MediaItem) -> Unit) {
-    val groups = remember(media) { media.groupBy { monthLabel(it.date) } }
-    LazyVerticalGrid(columns = GridCells.Fixed(3), contentPadding = PaddingValues(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        item(span = { GridItemSpan(maxLineSpan) }) { Text("Недавно добавленные · ${media.size}", Modifier.padding(horizontal = 20.dp, vertical = 10.dp), style = MaterialTheme.typography.bodySmall, color = Accent) }
-        groups.forEach { (date, members) ->
-            item(key = "month:$date", span = { GridItemSpan(maxLineSpan) }) { Text(date, Modifier.padding(horizontal = 20.dp, vertical = 16.dp), style = MaterialTheme.typography.titleMedium) }
-            items(members, key = { it.uri.toString() }) { item -> MediaThumb(item, Modifier.aspectRatio(1f).clip(RoundedCornerShape(8.dp)).clickable { open(item) }) }
-        }
-        if (hasMore) item(span = { GridItemSpan(maxLineSpan) }) { TextButton(onClick = more, modifier = Modifier.fillMaxWidth().padding(12.dp)) { Text("Загрузить следующие файлы") } }
-    }
-}
-
-@Composable
-private fun MediaThumb(item: MediaItem, modifier: Modifier = Modifier) {
+internal fun MediaThumb(item: MediaItem, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val bitmap by produceState<android.graphics.Bitmap?>(null, item.uri) {
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {

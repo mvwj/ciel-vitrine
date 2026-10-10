@@ -12,8 +12,8 @@ android {
         applicationId = "com.cielvitrine.app"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.1.5"
+        versionCode = 7
+        versionName = "0.1.6"
         // OAuth Client ID is public. Never add a client secret or an access token here.
         manifestPlaceholders["YANDEX_CLIENT_ID"] = yandexClientId
         manifestPlaceholders["YANDEX_OAUTH_HOST"] = "oauth.yandex.ru"
@@ -50,4 +50,7 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation(platform("androidx.compose:compose-bom:2025.10.01"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

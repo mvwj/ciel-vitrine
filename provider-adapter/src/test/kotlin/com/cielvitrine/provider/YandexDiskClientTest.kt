@@ -8,11 +8,44 @@ import okio.Buffer
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
+import java.io.IOException
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
 class YandexDiskClientTest {
-    @Test fun `signed transfer writes exact bytes and reads full body with download authorization`() {
+    @Test fun `metadata body failure retries the same GET once on a fresh connection`() {
+        MockWebServer().use { server ->
+            val body = """{"type":"file","path":"app:/original.bin","resource_id":"object","size":25,"modified":"v1"}"""
+            server.enqueue(MockResponse().setBody(body).setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY))
+            server.enqueue(MockResponse().setBody(body))
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient.Builder().retryOnConnectionFailure(false).build())
+            assertEquals("object", client.inspect("app:/original.bin").resource!!.objectId)
+            val requests = List(2) { server.takeRequest() }
+            assertTrue(requests.all { it.method == "GET" && it.getHeader("Authorization") == "OAuth test-token" })
+            assertEquals(requests[0].path, requests[1].path)
+            assertEquals(0, requests[1].sequenceNumber)
+        }
+    }
+    @Test fun `persistent metadata failure stops after two GETs`() {
+        MockWebServer().use { server ->
+            repeat(2) { server.enqueue(MockResponse().setBody("{}      ").setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)) }
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient.Builder().retryOnConnectionFailure(false).build())
+            assertThrows(IOException::class.java) { client.inspect("app:/original.bin") }
+            assertEquals(2, server.requestCount)
+        }
+    }
+    @Test fun `metadata recovery never repeats a failed directory PUT`() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST))
+            server.enqueue(MockResponse().setResponseCode(201))
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient.Builder().retryOnConnectionFailure(false).build())
+            assertThrows(IOException::class.java) { client.ensureDirectory("app:/test") }
+            assertEquals(1, server.requestCount)
+            assertEquals("PUT", server.takeRequest().method)
+        }
+    }
+    @Test fun `signed transfer writes exact bytes and reads full body with initial download authorization`() {
         val original = ByteArray(131079) { (it * 31).toByte() }
         MockWebServer().use { server ->
             val http = OkHttpClient.Builder().addInterceptor { chain ->
@@ -36,6 +69,47 @@ class YandexDiskClientTest {
             assertEquals("false", server.takeRequest().requestUrl!!.queryParameter("overwrite"))
             server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/download","method":"GET","templated":false}"""))
             assertArrayEquals(original, client.fullReadback("app:/test.cv2") { it.readBytes() })
+        }
+    }
+    @Test fun `download follows validated relative and cross-host redirects and calls the reader once`() {
+        MockWebServer().use { server ->
+            val seen = mutableListOf<String>(); var reads = 0
+            val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).addInterceptor { chain ->
+                val request = chain.request()
+                if (request.url.host == server.hostName) return@addInterceptor chain.proceed(request)
+                if (request.url.host == "downloader.dst.yandex.ru") assertEquals("OAuth test-token", request.header("Authorization"))
+                else assertNull(request.header("Authorization"))
+                assertEquals("GET", request.method)
+                seen += request.url.toString()
+                val response = Response.Builder().request(request).protocol(Protocol.HTTP_1_1).message("Test")
+                when (request.url.encodedPath) {
+                    "/start" -> response.code(302).header("Location", "/next").body(ByteArray(0).toResponseBody()).build()
+                    "/next" -> response.code(307).header("Location", "https://storage.dst.yandex.net/final").body(ByteArray(0).toResponseBody()).build()
+                    else -> response.code(200).body(byteArrayOf(1, 2, 3).toResponseBody()).build()
+                }
+            }.build()
+            val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), http)
+            server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/start","method":"GET","templated":false}"""))
+            val result = client.fullReadback("app:/original.bin") { reads++; it.readBytes() }
+            assertArrayEquals(byteArrayOf(1, 2, 3), result); assertEquals(1, reads); assertEquals(3, seen.size)
+        }
+    }
+    @Test fun `untrusted downgraded and looping download redirects never invoke the reader`() {
+        listOf("https://outside.example/file", "http://downloader.dst.yandex.ru/file", "https://downloader.dst.yandex.ru/start").forEach { target ->
+            MockWebServer().use { server ->
+                var transfers = 0
+                val http = OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).addInterceptor { chain ->
+                    val request = chain.request()
+                    if (request.url.host == server.hostName) return@addInterceptor chain.proceed(request)
+                    transfers++; assertEquals("OAuth test-token", request.header("Authorization"))
+                    Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(302).message("Redirect")
+                        .header("Location", target).body(ByteArray(0).toResponseBody()).build()
+                }.build()
+                server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/start","method":"GET","templated":false}"""))
+                val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), http)
+                assertThrows(IllegalStateException::class.java) { client.fullReadback("app:/original.bin") { throw AssertionError("Reader invoked before a verified transfer") } }
+                assertEquals(1, transfers)
+            }
         }
     }
     @Test fun `folder conflict is accepted only for an observed directory`() {

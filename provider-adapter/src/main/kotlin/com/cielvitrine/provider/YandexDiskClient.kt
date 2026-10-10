@@ -6,9 +6,11 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.Response
 import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import java.io.InputStream
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /** Additive REST foundation. No destructive operations and no unproven capability claims. */
@@ -37,7 +39,7 @@ class YandexDiskClient internal constructor(
     fun connectionInfo(expectedClientId: String): Account {
         val identityRequest = Request.Builder().url(identityApi.newBuilder().addQueryParameter("format", "json").build())
             .header("Authorization", authorization()).get().build()
-        val identity = http.newCall(identityRequest).execute().use { response ->
+        val identity = readMetadata(identityRequest) { response ->
             if (response.code == 401 || response.code == 403) throw ConnectionException(ConnectionProblem.UNAUTHORIZED)
             if (response.code != 200) throw ConnectionException(ConnectionProblem.UNAVAILABLE)
             boundedJson(response.body ?: throw ConnectionException(ConnectionProblem.UNAVAILABLE))
@@ -45,7 +47,7 @@ class YandexDiskClient internal constructor(
         val uid = identity["id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.matches(Regex("[0-9]{1,32}")) }
             ?: throw ConnectionException(ConnectionProblem.IDENTITY_MISMATCH)
         if (identity["client_id"]?.jsonPrimitive?.contentOrNull != expectedClientId) throw ConnectionException(ConnectionProblem.IDENTITY_MISMATCH)
-        val disk = http.newCall(apiRequest("", mapOf("fields" to "total_space,used_space,user.uid"))).execute().use { response ->
+        val disk = readMetadata(apiRequest("", mapOf("fields" to "total_space,used_space,user.uid"))) { response ->
             if (response.code == 401) throw ConnectionException(ConnectionProblem.UNAUTHORIZED)
             if (response.code == 403) throw ConnectionException(ConnectionProblem.DISK_PERMISSION)
             if (response.code != 200) throw ConnectionException(ConnectionProblem.UNAVAILABLE)
@@ -57,7 +59,7 @@ class YandexDiskClient internal constructor(
             ?: throw ConnectionException(ConnectionProblem.UNAVAILABLE)
         val used = disk["used_space"]?.jsonPrimitive?.longOrNull?.takeIf { it >= 0 }
             ?: throw ConnectionException(ConnectionProblem.UNAVAILABLE)
-        val root = http.newCall(apiRequest("resources", mapOf("path" to "app:/", "fields" to "type,path,resource_id"))).execute().use { response ->
+        val root = readMetadata(apiRequest("resources", mapOf("path" to "app:/", "fields" to "type,path,resource_id"))) { response ->
             if (response.code == 401) throw ConnectionException(ConnectionProblem.UNAUTHORIZED)
             if (response.code == 403) throw ConnectionException(ConnectionProblem.APP_FOLDER_PERMISSION)
             if (response.code == 404) throw ConnectionException(ConnectionProblem.APP_FOLDER_UNAVAILABLE)
@@ -71,7 +73,7 @@ class YandexDiskClient internal constructor(
 
     fun inspect(path: String): Observation {
         val request = apiRequest("resources", mapOf("path" to path, "fields" to "path,resource_id,size,sha256,modified,type"))
-        http.newCall(request).execute().use { response ->
+        readMetadata(request) { response ->
             if (response.code == 401 || response.code == 403) return Observation(ProviderObjectPresence.ACCESS_DENIED)
             // A missing path may be an external rename. It never proves deletion of a known object.
             if (response.code == 404) return Observation(ProviderObjectPresence.NOT_AT_EXPECTED_PATH)
@@ -95,7 +97,7 @@ class YandexDiskClient internal constructor(
         val code = http.newCall(request).execute().use { it.code }
         if (code == 201) return
         check(code == 409) { "Directory creation unavailable" }
-        http.newCall(apiRequest("resources", mapOf("path" to path, "fields" to "type"))).execute().use { response ->
+        readMetadata(apiRequest("resources", mapOf("path" to path, "fields" to "type"))) { response ->
             check(response.code == 200 && boundedJson(response.body ?: error("Missing metadata"))["type"]?.jsonPrimitive?.content == "dir")
         }
     }
@@ -135,15 +137,33 @@ class YandexDiskClient internal constructor(
 
     /** Caller must digest/recover the entire stream before accepting an exact-copy proof. */
     fun <T> fullReadback(path: String, read: (InputStream) -> T): T {
-        val link = signedLink("resources/download", path, "GET")
-        http.newCall(Request.Builder().url(link).header("Authorization", authorization()).get().build()).execute().use { response ->
-            check(response.code == 200) { "Download unavailable (HTTP ${response.code})" }
-            return (response.body ?: error("Empty download response")).byteStream().use(read)
+        var link = signedLink("resources/download", path, "GET")
+        val visited = mutableSetOf<HttpUrl>()
+        val downloads = http.newBuilder().followRedirects(false).followSslRedirects(false).build()
+        var sendAuthorization = true
+        repeat(6) {
+            check(isYandexTransferUrl(link) && visited.add(link)) { "Untrusted or looping download redirect" }
+            // Yandex documents OAuth on the initial download. Drop it on an origin change.
+            val request = Request.Builder().url(link).get().apply {
+                if (sendAuthorization) header("Authorization", authorization())
+            }.build()
+            downloads.newCall(request).execute().use { response ->
+                if (response.code in setOf(301, 302, 303, 307, 308)) {
+                    val next = response.header("Location")?.let(link::resolve) ?: error("Missing download redirect")
+                    check(isYandexTransferUrl(next)) { "Untrusted download redirect" }
+                    if (next.host != link.host) sendAuthorization = false
+                    link = next
+                } else {
+                    check(response.code == 200) { "Download unavailable (HTTP ${response.code})" }
+                    return (response.body ?: error("Empty download response")).byteStream().use(read)
+                }
+            }
         }
+        error("Too many download redirects")
     }
 
     private fun signedLink(endpoint: String, path: String, method: String, extras: Map<String, String> = emptyMap()): HttpUrl {
-        http.newCall(apiRequest(endpoint, mapOf("path" to path) + extras)).execute().use { response ->
+        readMetadata(apiRequest(endpoint, mapOf("path" to path) + extras)) { response ->
             check(response.code == 200) { "Link request failed (HTTP ${response.code})" }
             val json = boundedJson(response.body ?: error("Missing link"))
             check(json["method"]?.jsonPrimitive?.content == method && json["templated"]?.jsonPrimitive?.booleanOrNull == false)
@@ -151,6 +171,23 @@ class YandexDiskClient internal constructor(
             check(isYandexTransferUrl(url)) { "Untrusted transfer host/scheme" }
             return url
         }
+    }
+
+    /** Retry only bounded metadata GETs, including a failed body read. Never replay a PUT
+     * or a download callback that may already have written plaintext to its destination. */
+    private inline fun <T> readMetadata(request: Request, read: (Response) -> T): T {
+        require(request.method == "GET")
+        repeat(2) { attempt ->
+            try {
+                val call = http.newCall(request)
+                call.timeout().timeout(75, TimeUnit.SECONDS)
+                return call.execute().use(read)
+            } catch (e: IOException) {
+                if (attempt == 1) throw e
+                http.connectionPool.evictAll()
+            }
+        }
+        error("Metadata retry exhausted")
     }
 
     private fun authorization(): String {

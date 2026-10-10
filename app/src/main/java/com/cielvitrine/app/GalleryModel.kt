@@ -19,6 +19,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -33,7 +35,7 @@ data class LocalAlbum(val name: String, val members: Set<String>)
 data class CloudChoice(val provider: String, val archiveFirst: Boolean = true)
 data class GalleryState(
     val media: List<MediaItem> = emptyList(), val loading: Boolean = false,
-    val hasMore: Boolean = false, val access: MediaAccess = MediaAccess.NONE,
+    val access: MediaAccess = MediaAccess.NONE,
     val favorites: Set<String> = emptySet(), val albums: List<LocalAlbum> = emptyList(),
     val cloud: CloudChoice? = null, val message: String? = null,
     val fileOperationRunning: Boolean = false,
@@ -66,52 +68,53 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
     fun refresh() {
         scanJob?.cancel()
         scanJob = viewModelScope.launch {
-            mutable.value = mutable.value.copy(loading = true, access = access(), media = emptyList(), hasMore = false)
-            loadPage(null)
+            val granted = access()
+            mutable.value = mutable.value.copy(loading = true, access = granted,
+                media = if (granted != mutable.value.access || granted == MediaAccess.NONE) emptyList() else mutable.value.media)
+            loadLibrary()
         }
     }
 
-    fun more() {
-        if (mutable.value.loading || !mutable.value.hasMore) return
-        scanJob = viewModelScope.launch {
-            mutable.value = mutable.value.copy(loading = true)
-            loadPage(mutable.value.media.lastOrNull())
-        }
-    }
-
-    private suspend fun loadPage(after: MediaItem?) {
+    private suspend fun loadLibrary() {
         try {
-            val page = withContext(Dispatchers.IO) { queryPage(after) }
-            mutable.value = mutable.value.copy(media = mutable.value.media + page, loading = false, hasMore = page.size == PAGE_SIZE)
+            val library = withContext(Dispatchers.IO) {
+                val taskContext = currentCoroutineContext()
+                queryLibrary { taskContext.ensureActive() }
+            }
+            mutable.value = mutable.value.copy(media = library, loading = false, access = access())
         } catch (e: CancellationException) { throw e
         } catch (e: SecurityException) {
-            mutable.value = mutable.value.copy(loading = false, access = access(), message = "Доступ к фото изменился. Выберите доступные файлы ещё раз.")
+            mutable.value = mutable.value.copy(media = emptyList(), loading = false, access = access(), message = "Доступ к фото изменился. Выберите доступные файлы ещё раз.")
         } catch (e: Exception) {
             mutable.value = mutable.value.copy(loading = false, message = "Не удалось прочитать медиатеку: ${e.localizedMessage}")
         }
     }
 
-    private fun queryPage(after: MediaItem?): List<MediaItem> {
+    /** Metadata only: the whole date index is needed for direct scrolling to an old day.
+     * Media bytes and thumbnails are loaded only for visible cells. */
+    internal fun queryLibrary(checkCancelled: () -> Unit = {}): List<MediaItem> {
         if (access() == MediaAccess.NONE) return emptyList()
-        val columns = arrayOf("_id", "volume_name", "_display_name", "mime_type", "date_added", "bucket_display_name", "_size", "width", "height", "duration")
-        val selection = "media_type IN (1,3)" + if (after != null) " AND (date_added < ? OR (date_added = ? AND _id < ?))" else ""
+        val columns = arrayOf("_id", "volume_name", "_display_name", "mime_type", "date_added", "bucket_display_name", "_size", "width", "height", "duration", "datetaken", "date_modified")
+        val selection = "media_type IN (1,3) AND is_pending=0" + if (Build.VERSION.SDK_INT >= 30) " AND is_trashed=0" else ""
         val query = Bundle().apply {
             putString(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION, selection)
-            if (after != null) putStringArray(android.content.ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arrayOf(after.addedSeconds.toString(), after.addedSeconds.toString(), after.id.toString()))
             putString(android.content.ContentResolver.QUERY_ARG_SQL_SORT_ORDER, "date_added DESC, _id DESC")
-            putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, PAGE_SIZE)
         }
         val items = mutableListOf<MediaItem>()
+        val strings = mutableMapOf<String, String>()
+        fun shared(value: String): String = strings.getOrPut(value) { value }
         getApplication<Application>().contentResolver.query(MediaStore.Files.getContentUri("external"), columns, query, null)?.use { c ->
-            while (c.moveToNext() && items.size < PAGE_SIZE) {
+            while (c.moveToNext()) {
+                checkCancelled()
                 val id = c.getLong(0)
                 val added = c.getLong(4)
-                items += MediaItem(ContentUris.withAppendedId(MediaStore.Files.getContentUri(c.getString(1)), id),
-                    c.getString(2) ?: "Без имени", c.getString(3) ?: "application/octet-stream", added * 1000,
-                    added, id, c.getString(5) ?: "Другие", c.getLong(6), c.getInt(7), c.getInt(8), c.getLong(9))
+                items += MediaItem(ContentUris.withAppendedId(MediaStore.Files.getContentUri(shared(c.getString(1))), id),
+                    c.getString(2) ?: "Без имени", shared(c.getString(3) ?: "application/octet-stream"),
+                    galleryDate(if (c.isNull(10)) null else c.getLong(10), if (c.isNull(11)) null else c.getLong(11), added),
+                    added, id, shared(c.getString(5) ?: "Другие"), c.getLong(6), c.getInt(7), c.getInt(8), c.getLong(9))
             }
-        }
-        return items
+        } ?: error("Медиатека недоступна")
+        return items.sortedWith(compareByDescending<MediaItem> { it.date }.thenByDescending { it.addedSeconds }.thenBy { it.uri.toString() })
     }
 
     fun favorite(item: MediaItem) = viewModelScope.launch { preferenceWrites.withLock {
@@ -160,5 +163,11 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
         } }
     }.getOrDefault(emptyList())
 
-    companion object { const val PAGE_SIZE = 240 }
+}
+
+/** DATE_TAKEN is milliseconds; filesystem/index fallback dates are seconds. */
+internal fun galleryDate(takenMillis: Long?, modifiedSeconds: Long?, addedSeconds: Long): Long {
+    if (takenMillis != null && takenMillis > 0) return takenMillis
+    val seconds = modifiedSeconds?.takeIf { it > 0 } ?: addedSeconds.coerceAtLeast(0)
+    return Math.multiplyExact(seconds, 1000)
 }
