@@ -36,7 +36,7 @@ class CloudPerformanceAndroidTest {
                 override fun save(job:ArchiveJob) { job.validate(); jobs[job.id]=job }
             }
             val cloud=YandexArchiveCloud(context,session!!)
-            val staging=AndroidArchiveStaging(context,store=journal,cloud=cloud)
+            val staging=AndroidArchiveStaging(context,store=journal,cloud=cloud,directory=File(scope,"cold"))
             val trials=JSONArray()
             try {
                 val source=File(scope,"generated-noise.jpg")
@@ -73,7 +73,7 @@ class CloudPerformanceAndroidTest {
                     trials.put(row)
                     File(context.filesDir,"cloud-performance.json").writeText(JSONObject().put("sdk",android.os.Build.VERSION.SDK_INT).put("model",android.os.Build.MODEL).put("trials",trials).toString(2))
                 }
-            } finally { jobs.keys.forEach { staging.removeOwnedContainer(it) }; scope.listFiles()?.forEach { it.delete() }; scope.delete() }
+            } finally { jobs.keys.forEach { staging.removeOwnedContainer(it) }; scope.deleteRecursively() }
         }
     }
 }

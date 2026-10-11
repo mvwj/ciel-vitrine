@@ -77,7 +77,7 @@ class TenPhotoRoundtripAndroidTest {
             override fun save(job: ArchiveJob) { job.validate(); jobs[job.id] = job }
             override fun group(id: String) = group?.takeIf { it.id == id }
         }
-        val staging = AndroidArchiveStaging(context, store = journal, cloud = cloud)
+        val staging = AndroidArchiveStaging(context, store = journal, cloud = cloud,directory=File(scope,"cold"))
         val report = File(context.filesDir, "roundtrip-$mode.csv")
         report.writeText("name,bytes,sha256,mtime_seconds,mtime_nanos,cold_path,gallery_path,result\n")
         fun steps(engine: ColdArchive, id: String, name: String) {
@@ -131,7 +131,7 @@ class TenPhotoRoundtripAndroidTest {
             println("CIEL_PHOTO_ROUNDTRIP $mode ${index + 1}/10 PASS $name")
         } } finally {
             jobs.keys.forEach { staging.removeOwnedContainer(it) }
-            scope.listFiles()?.forEach { it.delete() }; scope.delete()
+            scope.deleteRecursively()
         }
     }
 }

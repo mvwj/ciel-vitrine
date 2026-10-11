@@ -54,6 +54,10 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         }
     }
     override fun save(job: ArchiveJob) { transaction { putJob(job) } }
+    fun contains(id:String):Boolean = synchronized(guard) {
+        require(id.matches(Regex("[0-9a-f]{32}")))
+        db.rawQuery("SELECT 1 FROM jobs WHERE id=?",arrayOf(id)).use{it.moveToFirst()}
+    }
     fun addSelected(jobs: List<ArchiveJob>):List<String> = transaction {
         require(jobs.isNotEmpty() && jobs.size <= 240 && jobs.map { it.source }.distinct().size == jobs.size)
         jobs.map { job ->

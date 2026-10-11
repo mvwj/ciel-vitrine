@@ -42,7 +42,7 @@ class TileRealCloudAndroidTest {
                 override fun save(job:ArchiveJob){job.validate();jobs[job.id]=job}
             }
             val cloud=YandexArchiveCloud(context,session!!)
-            val staging=AndroidArchiveStaging(context,store=journal,cloud=cloud)
+            val staging=AndroidArchiveStaging(context,store=journal,cloud=cloud,directory=File(scope,"cold"))
             val job=ArchiveJob(ArchiveStore.randomId(),session.uid,session.appRootId,Uri.fromFile(source).toString(),source.name,"image/jpeg",source.length(),containerExtension=ContainerExtension.BIN)
             ownId=job.id;jobs[job.id]=job
             val engine=ColdArchive(journal,staging,cloud)
@@ -80,7 +80,7 @@ class TileRealCloudAndroidTest {
                 .put("tile_count",catalog.tiles.size).put("network_range_count_after_repeat",counts.size).put("hdr_gainmap_preserved",true)
             File(context.filesDir,"tile-network-check.json").writeText(row.toString(2))
         } finally {
-            ownId?.let{AndroidArchiveStaging(context).removeOwnedContainer(it)}
+            ownId?.let{AndroidArchiveStaging(context,directory=File(scope,"cold")).removeOwnedContainer(it)}
             scope.deleteRecursively()
         }
     }

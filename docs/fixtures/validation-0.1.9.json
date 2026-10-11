@@ -14,6 +14,13 @@
     "time_seconds": 28.129, "personal_originals_deleted": 0,
     "previous_run_before_thumbnail_fix_seconds": 30.065
   },
+  "emulator_thumbnail_regression": {
+    "api": 35, "tests": 13, "failures": 0, "time_seconds": 41.2
+  },
+  "phone_staging_cleanup_regression": {
+    "tests": 1, "failures": 0, "time_seconds": 0.124,
+    "unknown_containers_preserved": true, "corrupt_existing_row_rejected": true
+  },
   "real_yandex_partial_transport": {
     "fixture": "generated Ultra HDR JPEG 1280x960",
     "tests": 1, "failures": 0, "time_seconds": 163.644,
@@ -29,8 +36,8 @@
     "visible_range_ms": 6887.704216, "cached_region_ms": 2706.788644
   },
   "apk": {
-    "bytes": 75663455,
-    "sha256": "EEC900284E1D03D999A1C1F3B6E94B7026E1A842414900CB3E451022BF23B931"
+    "bytes": 75664491,
+    "sha256": "5875491EA44E18ABAD018BD355F91ADD813F0A4F9926044C8477384FDFB65A48"
   },
   "selected_user_file_benchmark_completed": false,
   "partial_transport_scope": "static native-region-decodable photographs",

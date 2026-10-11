@@ -71,8 +71,8 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
 }
 
 internal class AndroidArchiveStaging(private val context: Context, private val stopped: () -> Boolean = { false },
-    private val store: ArchiveJournal? = null, private val cloud: ArchiveCloud? = null) : ArchiveStaging {
-    private val directory = File(context.noBackupFilesDir, "cold-staging")
+    private val store: ArchiveJournal? = null, private val cloud: ArchiveCloud? = null,
+    private val directory:File = File(context.noBackupFilesDir, "cold-staging")) : ArchiveStaging {
     private fun file(id: String, suffix: String = ".cv2"): File {
         require(id.matches(Regex("[0-9a-f]{32}")))
         check(directory.isDirectory || directory.mkdirs())
@@ -137,9 +137,12 @@ internal class AndroidArchiveStaging(private val context: Context, private val s
     }
     override fun open(id: String) = stopAware(file(id).inputStream())
     fun hasOwnedContainer(id: String) = file(id).exists()
-    fun cleanVerifiedOwned(journal: ArchiveJournal) {
+    fun cleanVerifiedOwned(journal: ArchiveStore) {
         directory.listFiles()?.filter { it.name.matches(Regex("[0-9a-f]{32}\\.cv2")) }?.forEach { owned ->
             val id = owned.name.removeSuffix(".cv2")
+            // An unjournaled stage is not evidence of a verified backup. Preserve it and continue.
+            // Existing rows still authenticate on load; corruption must not be hidden by cleanup.
+            if(!journal.contains(id))return@forEach
             if (journal.load(id).phase == ArchivePhase.VERIFIED) runCatching { removeOwnedContainer(id) }
         }
     }
