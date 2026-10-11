@@ -1,0 +1,42 @@
+{
+  "release": "0.1.8",
+  "version_code": 9,
+  "source_commit": "92ca36b2869b34943b19c3c5be3d58075c8777cd",
+  "ci_run": "private-historical-CI-run",
+  "ci_android_api": 35,
+  "ci_android": {
+    "tests": 40,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 2,
+    "time_seconds": 96.862
+  },
+  "local_android": {
+    "tests": 40,
+    "skipped_real_cloud": 2,
+    "failures": 0,
+    "time_seconds": 66.502
+  },
+  "jvm": {
+    "tests": 82,
+    "failures": 0
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 25
+  },
+  "phone": {
+    "api": 36,
+    "model": "Android test device",
+    "tests": 17,
+    "failures": 0,
+    "time_seconds": 13.959,
+    "initial_locked_run_failures": 5,
+    "personal_originals_deleted": 0
+  },
+  "apk": {
+    "bytes": 75391695,
+    "sha256": "0B334107F1982086A5B1F62B6FE60D425757C429960013466BE719547FCB32DE"
+  },
+  "real_cloud_benchmark_repeated": false
+}
