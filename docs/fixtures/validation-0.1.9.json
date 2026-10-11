@@ -1,0 +1,37 @@
+{
+  "release": "0.1.9",
+  "version_code": 10,
+  "date": "2026-10-11",
+  "jvm": {"tests": 85, "failures": 0, "errors": 0},
+  "python": {"pos_v1": 4, "cvpos2": 10, "failures": 0},
+  "lint": {"errors": 0, "warnings": 41},
+  "local_android": {
+    "api": 35, "tests": 51, "passed": 48, "skipped_real_cloud": 3,
+    "failures": 0, "time_seconds": 301.778
+  },
+  "phone": {
+    "api": 36, "model": "Android test device", "tests": 27, "failures": 0,
+    "time_seconds": 30.065, "personal_originals_deleted": 0
+  },
+  "real_yandex_partial_transport": {
+    "fixture": "generated Ultra HDR JPEG 1280x960",
+    "tests": 1, "failures": 0, "time_seconds": 163.644,
+    "range_bytes": 891592, "derivative_pack_bytes": 5500206,
+    "tile_count": 9, "network_range_count_after_repeat": 1,
+    "native_base_and_gainmap_pixels_equal": true,
+    "original_bytes_unchanged": true,
+    "scope": "engineering fixture; not a selected-user-file benchmark",
+    "times_include_network_account_checks": true,
+    "prepare_ms": 74035.870232, "original_upload_ms": 15838.996973,
+    "original_verify_ms": 6303.064841,
+    "tile_build_upload_verify_ms": 57103.264822,
+    "visible_range_ms": 6887.704216, "cached_region_ms": 2706.788644
+  },
+  "apk": {
+    "bytes": 75656527,
+    "sha256": "BE1F824FDF24EF813319595F9EAB3FF564B9A660E1D13AA35F9814C5132462DF"
+  },
+  "selected_user_file_benchmark_completed": false,
+  "partial_transport_scope": "static native-region-decodable photographs",
+  "destructive_android_actions_enabled": false
+}

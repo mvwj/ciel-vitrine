@@ -34,7 +34,10 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
                                 cloud.requireAccount(saved.uid, saved.appRootId!!)
                                 store.save(job.copy(uid = saved.uid, rootId = saved.appRootId))
                             }
-                            engine.step(job.id)
+                            val stage = when (job.phase) { ArchivePhase.QUEUED -> "prepare"; ArchivePhase.PREPARED -> "upload"; else -> "verify" }
+                            PerformanceJournal(applicationContext).timed(job.id, stage) { engine.step(job.id) }
+                            val completed=store.load(job.id)
+                            if(completed.phase==ArchivePhase.VERIFIED && completed.mime.startsWith("image/"))TileWorker.enqueue(applicationContext,job.id)
                             setProgressAsync(workDataOf("phase" to store.load(job.id).phase.name))
                         } catch (_: Exception) {
                             if (stopping()) break
@@ -89,7 +92,9 @@ internal class AndroidArchiveStaging(private val context: Context, private val s
                 inventory.requireUnchanged(job)
                 val result = inventory.openOriginal(job).use { source -> FileOutputStream(temp).use { output ->
                     val dates = OriginalDatePolicy.capture(context, android.net.Uri.parse(job.source), source)
-                    val result = Pos2.write(stopAware(source), output, job.name, job.mime, job.sourceBytes, ColdArchive.MAX_BYTES, times = dates)
+                    val result = PerformanceJournal(context).timed(job.id, "encrypt") {
+                        Pos2.write(stopAware(source), output, job.name, job.mime, job.sourceBytes, ColdArchive.MAX_BYTES, times = dates)
+                    }
                     require(OriginalDatePolicy.capture(context, android.net.Uri.parse(job.source), source) == dates)
                     output.fd.sync(); result
                 } }
@@ -145,7 +150,7 @@ internal class AndroidArchiveStaging(private val context: Context, private val s
     }
 }
 
-internal class YandexArchiveCloud(private val context: Context, private val session: YandexSession) : ArchiveCloud {
+internal class YandexArchiveCloud(private val context: Context, private val session: YandexSession) : TilePreparationCloud {
     private val client = YandexDiskClient { session.token }
     override fun requireAccount(uid: String, rootId: String) {
         val current = YandexSessionStore(context).load() ?: error("Sign-in required")
@@ -169,4 +174,8 @@ internal class YandexArchiveCloud(private val context: Context, private val sess
     }
     override fun uploadNew(path: String, bytes: Long, open: () -> InputStream) { client.uploadNew(path, bytes, open) }
     override fun <T> readback(path: String, read: (InputStream) -> T): T = client.fullReadback(path, read)
+    override fun ensureTileFolders() {
+        client.ensureDirectory("app:/ciel-vitrine-v2"); client.ensureDirectory("app:/ciel-vitrine-v2/tiles")
+    }
+    fun range(path: String, offset: Long, length: Int, total: Long) = client.rangeReadback(path, offset, length, total)
 }

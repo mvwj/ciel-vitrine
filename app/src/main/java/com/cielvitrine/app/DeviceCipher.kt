@@ -10,7 +10,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
 /** Small device-bound payloads, independent from public original-container keys and OAuth key. */
-internal class DeviceCipher(private val alias: String, private val domain: String) {
+internal class DeviceCipher(private val alias: String, private val domain: String, private val maximumPlainBytes: Int = 262144) {
     private val keys by lazy { KeyStore.getInstance("AndroidKeyStore").apply { load(null) } }
     private var cachedKey: SecretKey? = null
     private var cachedIndex: SecretKey? = null
@@ -25,14 +25,14 @@ internal class DeviceCipher(private val alias: String, private val domain: Strin
             .setRandomizedEncryptionRequired(true).build())
     }.generateKey()
     @Synchronized fun seal(identity: String, plain: ByteArray): ByteArray {
-        require(plain.size <= 262144)
+        require(plain.size <= maximumPlainBytes)
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         val key = cachedKey ?: (existing() ?: if (mayCreate) create() else error("Private database key missing")).also { cachedKey = it; mayCreate = false }
         c.init(Cipher.ENCRYPT_MODE, key); c.updateAAD("$domain:$identity".toByteArray())
         return c.iv + c.doFinal(plain)
     }
     @Synchronized fun open(identity: String, bytes: ByteArray): ByteArray {
-        require(bytes.size in 28..262172)
+        require(bytes.size in 28..maximumPlainBytes + 28)
         val c = Cipher.getInstance("AES/GCM/NoPadding")
         val key = cachedKey ?: (existing() ?: error("Private database key missing")).also { cachedKey = it; mayCreate = false }
         c.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, bytes.copyOfRange(0, 12)))

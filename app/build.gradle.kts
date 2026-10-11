@@ -14,8 +14,8 @@ android {
         applicationId = "com.cielvitrine.app"
         minSdk = 29
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.1.8"
+        versionCode = 10
+        versionName = "0.1.9"
         // OAuth Client ID is public. Never add a client secret or an access token here.
         manifestPlaceholders["YANDEX_CLIENT_ID"] = yandexClientId
         manifestPlaceholders["YANDEX_OAUTH_HOST"] = "oauth.yandex.ru"

@@ -104,6 +104,11 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     var albumFilter by rememberSaveable { mutableStateOf<String?>(null) }
     var favoriteFilter by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf<MediaItem?>(null) }
+    var selectionMode by rememberSaveable { mutableStateOf(false) }
+    var selection by rememberSaveable { mutableStateOf(listOf<String>()) }
+    var pendingSelected by rememberSaveable { mutableStateOf(false) }
+    val selectionItems=remember(state.media,selection){state.media.filter{it.binding!=null && it.binding in selection}}
+    fun selectItem(item:MediaItem){item.binding?.let { key -> selectionMode=true;selection=if(key in selection)selection-key else selection+key }}
     var addAlbum by remember { mutableStateOf(false) }
     var providerDialog by remember { mutableStateOf(false) }
     var archiveInfo by remember { mutableStateOf(false) }
@@ -112,7 +117,13 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     var groupInfo by remember { mutableStateOf(false) }
     var coldSelection by remember { mutableStateOf(setOf<String>()) }
     var pendingAll by rememberSaveable { mutableStateOf(false) }
-    val originalPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (pendingAll) { pendingAll = false; archiveModel.prepareAll() } }
+    val originalPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (pendingAll) { pendingAll = false; if(granted)archiveModel.prepareAll() else model.message("Для архива оригинала нужен доступ к исходным метаданным") }
+        if (pendingSelected) { pendingSelected=false
+            if(granted && selectionItems.size==selection.size)archiveModel.addSelected(selectionItems)
+            else model.message("Не все выбранные оригиналы доступны с исходными метаданными. Выбор сохранён.")
+        }
+    }
     val selectColdFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) archiveModel.add(uri) }
     var pendingSource by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingContainerHash by rememberSaveable { mutableStateOf<String?>(null) }
@@ -174,7 +185,9 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
         state.media.filter { item -> (folder == null || item.folder == folder) && (!favoriteFilter || state.favorites.containsMedia(item)) &&
             (albumFilter == null || (state.albums.firstOrNull { it.name == albumFilter }?.members ?: emptySet()).containsMedia(item)) }
     }
-    BackHandler(folder != null || albumFilter != null || favoriteFilter) { folder = null; albumFilter = null; favoriteFilter = false }
+    BackHandler(selectionMode || folder != null || albumFilter != null || favoriteFilter) {
+        if(selectionMode){selectionMode=false;selection=emptyList()}else{folder=null;albumFilter=null;favoriteFilter=false}
+    }
 
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
         NavigationBar(containerColor = Paper, tonalElevation = 0.dp) {
@@ -206,8 +219,20 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                         FilterChip(selected = !favoriteFilter, onClick = { favoriteFilter = false }, label = { Text("Все") })
                         FilterChip(selected = favoriteFilter, onClick = { favoriteFilter = !favoriteFilter }, label = { Text("Избранное") }, leadingIcon = { Icon(Icons.Outlined.FavoriteBorder, null, Modifier.size(16.dp)) })
                     }
+                    if(state.media.isNotEmpty())Row(Modifier.padding(horizontal=16.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick={selectionMode=!selectionMode;if(!selectionMode)selection=emptyList()}){Text(if(selectionMode)"Готово · ${selectionItems.size}" else "Выбрать")}
+                        if(selectionMode)TextButton(onClick={selection=filtered.mapNotNull{it.binding}.take(240)}){Text("Выбрать все")}
+                    }
+                    if(selectionMode && selectionItems.isNotEmpty()) {
+                        Row(Modifier.padding(horizontal=16.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                            Button(enabled=!archive.busy && selectionItems.size<=240,onClick={pendingSelected=true;originalPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)}){Text("В облако (${selectionItems.size})")}
+                            TextButton(onClick={selectionItems.filter{!state.favorites.containsMedia(it)}.forEach{model.favorite(it)}}){Text("В избранное")}
+                            TextButton(onClick={addAlbum=true}){Text("В альбом")}
+                        }
+                        Text("Загрузка создаёт холодный архив и сохраняет исходники на телефоне. Удаление и освобождение места пока недоступны.",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.bodySmall)
+                    }
                     if (filtered.isEmpty() && state.access != MediaAccess.NONE && !state.loading) EmptyState("Здесь будут ваши снимки", "Добавьте фото на телефон или измените выбранный доступ.", Icons.Outlined.Photo)
-                    else MediaTimeline(filtered, Modifier.weight(1f), open = { selected = it })
+                    else MediaTimeline(filtered, Modifier.weight(1f),open={if(selectionMode)selectItem(it)else selected=it},select={selectItem(it)},selected=selection.toSet())
                 }
                 Destination.ALBUMS -> LazyColumn(contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     item { CollectionCard("Избранное", collectionSummary(state.favorites, state.media), state.media.firstOrNull { state.favorites.containsMedia(it) }, Icons.Outlined.FavoriteBorder) { favoriteFilter = true; destination = Destination.PHOTOS } }
@@ -220,6 +245,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                     state.media.groupBy { it.folder }.forEach { (name, members) -> item { CollectionCard(name, "${members.size} файлов", members.first(), Icons.Outlined.FolderOpen) { folder = name; destination = Destination.PHOTOS } } }
                 }
                 Destination.CLOUD -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    item { PerformanceCard(archive.benchmarkIds) }
                     if (state.cloud?.provider != "Google Drive" || yandex.account != null) item {
                         YandexAccountCard(yandex, { signInYandex() }, { cloudModel.recheck() }, { cloudModel.disconnect() })
                     } else item { InfoCard("Google Drive", "Подключение Google Drive появится позже. Сейчас доступен вход через Яндекс Диск.", Icons.Outlined.CloudQueue, "Выбрать Яндекс Диск", { model.chooseCloud("Яндекс Диск") }) }
@@ -265,6 +291,13 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                                 job.sourceStamp?.let { Text("${it.width} × ${it.height}${if (it.durationMillis > 0) " · ${it.durationMillis / 1000} с" else ""}", style = MaterialTheme.typography.bodySmall) }
                                 job.verifiedAt?.let { Text("Проверено ${dateLabel(it)}. Доступность облачной копии может измениться.", style = MaterialTheme.typography.bodySmall) }
                                 job.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                                if(job.phase==com.cielvitrine.archive.ArchivePhase.VERIFIED) {
+                                    if(job.mime.startsWith("image/")) {
+                                        Text(archive.tiles[job.id] ?: "Готовим фрагменты",style=MaterialTheme.typography.bodySmall)
+                                        if(archive.tiles[job.id]!="Фрагменты готовы")TextButton(onClick={archiveModel.prepareTiles(job.id)}){Text("Подготовить фрагменты")}
+                                    }
+                                    TextButton(onClick={if(job.id !in archive.benchmarkIds)archiveModel.measure(job.id);selected=job.mediaItem()}){Text("Открыть облачную копию")}
+                                }
                                 if (job.deferred && !archive.busy) TextButton(onClick = { archiveModel.retry(job.id) }) { Text(if (job.phase == com.cielvitrine.archive.ArchivePhase.UPLOAD_UNCERTAIN) "Повторить проверку" else "Продолжить") }
                                 if (job.phase == com.cielvitrine.archive.ArchivePhase.VERIFIED && job.zone == com.cielvitrine.archive.OriginalZone.COLD) Row(verticalAlignment = Alignment.CenterVertically) {
                                     Checkbox(job.id in coldSelection, onCheckedChange = { checked -> if (!checked) coldSelection = coldSelection - job.id else if (coldSelection.size < 32) coldSelection = coldSelection + job.id })
@@ -288,14 +321,19 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
         }
     }
 
-    selected?.let { item -> Viewer(item, state.favorites.containsMedia(item), { selected = null }, { model.favorite(item) }, { addAlbum = true }) }
+    selected?.let { item ->
+        val pages=if(item.cloudId!=null)archive.jobs.filter{it.phase==com.cielvitrine.archive.ArchivePhase.VERIFIED}.map{it.mediaItem()}
+            else filtered.map{local-> archive.jobs.firstOrNull{it.zone==com.cielvitrine.archive.OriginalZone.COLD && it.matches(local)}?.let{job->local.copy(performanceId=job.id)}?:local}
+        GalleryViewer(pages,item,close={selected=null},isFavorite={state.favorites.containsMedia(it)},favorite={model.favorite(it)},
+            album={selected=it;addAlbum=true},changed={selected=it},resolveCloud={archiveModel.openCloud(it.cloudId!!)})
+    }
     if (addAlbum) {
         var name by remember { mutableStateOf("") }
         AlertDialog(onDismissRequest = { addAlbum = false }, title = { Text(if (selected == null) "Новый альбом" else "Добавить в альбом") },
             text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Название") }, singleLine = true)
-                if (selected != null) state.albums.forEach { a -> TextButton(onClick = { model.addToAlbum(a.name, selected); addAlbum = false }) { Text(a.name) } }
-            } }, confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { model.addToAlbum(name, selected); addAlbum = false }) { Text("Сохранить") } },
+                if (selected != null || selectionMode) state.albums.forEach { a -> TextButton(onClick = { if(selectionMode)selectionItems.forEach{model.addToAlbum(a.name,it)}else model.addToAlbum(a.name,selected); addAlbum = false }) { Text(a.name) } }
+            } }, confirmButton = { TextButton(enabled = name.isNotBlank(), onClick = { if(selectionMode)selectionItems.forEach{model.addToAlbum(name,it)}else model.addToAlbum(name,selected); addAlbum = false }) { Text("Сохранить") } },
             dismissButton = { TextButton(onClick = { addAlbum = false }) { Text("Отмена") } })
     }
     if (providerDialog) AlertDialog(onDismissRequest = { providerDialog = false }, title = { Text("Сначала холодный архив") }, text = {
@@ -411,38 +449,6 @@ private fun CollectionCard(title: String, subtitle: String, cover: MediaItem?, i
             else Box(Modifier.size(72.dp).background(Mist, RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) { Icon(icon, null, tint = Accent) }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) { Text(title, style = MaterialTheme.typography.titleMedium); Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Accent) }
             Icon(Icons.Outlined.ChevronRight, null, tint = Accent)
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun Viewer(item: MediaItem, favorite: Boolean, close: () -> Unit, toggleFavorite: () -> Unit, album: () -> Unit) {
-    androidx.compose.ui.window.Dialog(onDismissRequest = close, properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
-        Scaffold(containerColor = Color(0xFF18262D), contentColor = Color.White, topBar = {
-            TopAppBar(title = { Text(dateLabel(item.date), style = MaterialTheme.typography.titleMedium) }, navigationIcon = { IconButton(onClick = close) { Icon(Icons.Outlined.ArrowBack, "Назад") } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF18262D), titleContentColor = Color.White, navigationIconContentColor = Color.White))
-        }, bottomBar = {
-            Column(Modifier.navigationBarsPadding().padding(horizontal = 24.dp, vertical = 12.dp)) {
-                Text(item.name, maxLines = 2, style = MaterialTheme.typography.titleSmall)
-                Text("${item.width} × ${item.height} · ${"%.1f".format(item.bytes / 1048576.0)} МБ · ${item.mime}", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = .65f))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                    IconButton(onClick = toggleFavorite) { Icon(if (favorite) Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder, "Избранное", tint = if (favorite) Color(0xFFE8AEA5) else Color.White) }
-                    IconButton(onClick = album) { Icon(Icons.Outlined.CreateNewFolder, "Добавить в альбом", tint = Color.White) }
-                }
-            }
-        }) { inset ->
-            if (item.isVideo) VideoContent(item, Modifier.fillMaxSize().padding(inset))
-            else {
-                var scale by remember(item.uri) { mutableFloatStateOf(1f) }
-                var x by remember(item.uri) { mutableFloatStateOf(0f) }
-                var y by remember(item.uri) { mutableFloatStateOf(0f) }
-                Box(Modifier.fillMaxSize().padding(inset).clip(RoundedCornerShape(0.dp)).pointerInput(item.uri) {
-                    detectTransformGestures { _, pan, zoom, _ -> scale = (scale * zoom).coerceIn(1f, 5f); x = if (scale == 1f) 0f else x + pan.x; y = if (scale == 1f) 0f else y + pan.y }
-                }, contentAlignment = Alignment.Center) {
-                    PhotoContent(item, Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = x, translationY = y))
-                }
-            }
         }
     }
 }

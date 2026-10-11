@@ -98,6 +98,20 @@ internal class MediaInventory(private val context: Context) {
             require(c.moveToFirst() && stamp(c, expected.volume, expected.epoch) == expected)
         } ?: error("Source unavailable")
     }
+    fun selected(item: MediaItem): ArchiveJob {
+        require(currentMediaBinding(context, item.uri) == item.binding && item.binding != null) { "Привязка выбранного фото изменилась" }
+        val volume = MediaStore.getVolumeName(item.uri); val version = epoch(volume)
+        val source = resolver.query(item.uri, projection(), selection(), null, null)?.use { c ->
+            require(c.moveToFirst()); stamp(c, volume, version)
+        } ?: error("Выбранный файл недоступен")
+        require(epoch(volume) == version && currentMediaBinding(context, item.uri) == item.binding)
+        require(source.generation == item.generation && source.bytes == item.bytes && source.modifiedSeconds == item.modifiedSeconds)
+        val large = item.bytes > ColdArchive.MAX_BYTES
+        return ArchiveJob(ArchiveStore.randomId(), null, null, item.uri.toString(), item.name, item.mime, item.bytes,
+            if (large) ArchivePhase.UNSUPPORTED_SIZE else ArchivePhase.QUEUED, sourceStamp = source,
+            createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
+            notice = if (large) "Файл свыше 128 МиБ учтён; загрузка частями ещё недоступна." else null)
+    }
     fun openOriginal(job: ArchiveJob): InputStream = openOriginal(Uri.parse(job.source))
     fun openOriginal(source: Uri): InputStream {
         var uri = source

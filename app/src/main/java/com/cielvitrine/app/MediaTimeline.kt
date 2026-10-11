@@ -2,6 +2,8 @@ package com.cielvitrine.app
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.*
@@ -34,9 +36,11 @@ import kotlin.math.roundToInt
 private data class TimelineDay(val date: LocalDate, val members: List<MediaItem>, val headerIndex: Int)
 
 /** Square thumbnails with a narrow gutter; larger captions separate days. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun MediaTimeline(
     media: List<MediaItem>, modifier: Modifier = Modifier, open: (MediaItem) -> Unit,
+    select: (MediaItem)->Unit = {}, selected: Set<String> = emptySet(),
     thumbnail: @Composable (MediaItem, Modifier) -> Unit = { item, cell -> MediaThumb(item, cell) },
 ) {
     val zone = ZoneId.systemDefault()
@@ -104,7 +108,12 @@ internal fun MediaTimeline(
                         style = MaterialTheme.typography.titleMedium)
                 }
                 items(day.members, key = { it.uri.toString() }, contentType = { "media" }) { item ->
-                    thumbnail(item, Modifier.testTag("media:${item.uri}").aspectRatio(1f).clickable { open(item) })
+                    Box(Modifier.testTag("media:${item.uri}").aspectRatio(1f).combinedClickable(
+                        onClick={open(item)},onLongClick={select(item)})) {
+                        thumbnail(item,Modifier.fillMaxSize())
+                        if(item.binding in selected)Surface(Modifier.align(Alignment.TopEnd).padding(6.dp),color=MaterialTheme.colorScheme.primary,
+                            shape=androidx.compose.foundation.shape.CircleShape){Text("✓",Modifier.padding(6.dp),color=MaterialTheme.colorScheme.onPrimary)}
+                    }
                 }
             }
         }

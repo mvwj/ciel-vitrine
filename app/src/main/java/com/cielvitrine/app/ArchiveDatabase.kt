@@ -54,6 +54,16 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         }
     }
     override fun save(job: ArchiveJob) { transaction { putJob(job) } }
+    fun addSelected(jobs: List<ArchiveJob>):List<String> = transaction {
+        require(jobs.isNotEmpty() && jobs.size <= 240 && jobs.map { it.source }.distinct().size == jobs.size)
+        jobs.map { job ->
+            require(job.zone == OriginalZone.COLD && job.sourceStamp != null)
+            val stamp = job.sourceStamp!!
+            val key = cipher.index("selected:${job.source}:${stamp.epoch}:${stamp.generation}:${stamp.modifiedSeconds}:${stamp.bytes}")
+            val exists = db.rawQuery("SELECT id FROM jobs WHERE source_key=?", arrayOf(key)).use { if(it.moveToFirst())it.getString(0)else null }
+            if (exists==null){putJob(job, key);job.id}else exists
+        }
+    }
     private fun putJob(job: ArchiveJob, sourceKey: String? = null) {
         job.validate()
         val exists = db.rawQuery("SELECT revision FROM jobs WHERE id=?", arrayOf(job.id)).use { c -> if (c.moveToFirst()) c.getLong(0) else null }

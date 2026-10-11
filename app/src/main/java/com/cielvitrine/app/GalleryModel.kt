@@ -30,6 +30,7 @@ data class MediaItem(
     val bytes: Long, val width: Int, val height: Int, val duration: Long,
     val modifiedSeconds: Long = 0, val generation: Long? = null,
     val binding: String? = null,
+    val cloudId: String? = null, val performanceId: String? = null,
 ) { val isVideo get() = mime.startsWith("video/") }
 
 enum class MediaAccess { NONE, SELECTED, FULL, MIXED }

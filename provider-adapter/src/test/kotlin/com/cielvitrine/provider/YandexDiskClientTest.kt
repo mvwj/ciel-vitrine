@@ -14,6 +14,43 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
 class YandexDiskClientTest {
+    @Test fun `range transfer returns only exact bytes and retains range across a trusted redirect without OAuth`() {
+        MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/file","method":"GET","templated":false}"""))
+            var calls=0
+            val http=OkHttpClient.Builder().addInterceptor { chain ->
+                val req=chain.request()
+                if(req.url.host==server.url("/").host)return@addInterceptor chain.proceed(req)
+                assertEquals("bytes=100-103",req.header("Range"));assertEquals("identity",req.header("Accept-Encoding"));calls++
+                val response=Response.Builder().request(req).protocol(Protocol.HTTP_1_1)
+                if(calls==1){assertEquals("OAuth test-token",req.header("Authorization"));response.code(302).message("Redirect").header("Location","https://storage.yandex.net/file").body(ByteArray(0).toResponseBody()).build()}
+                else {assertNull(req.header("Authorization"));response.code(206).message("Partial").header("Content-Range","bytes 100-103/1000").body(byteArrayOf(1,2,3,4).toResponseBody()).build()}
+            }.build()
+            assertArrayEquals(byteArrayOf(1,2,3,4),YandexDiskClient({"test-token"},server.url("/v1/disk/"),http).rangeReadback("app:/pack.bin",100,4,1000))
+            assertEquals(2,calls)
+        }
+    }
+    @Test fun `range rejects full responses wrong offsets truncated oversized and encoded bodies`() {
+        for(case in 0..4)MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/file","method":"GET","templated":false}"""))
+            val http=OkHttpClient.Builder().addInterceptor { chain ->
+                val req=chain.request();if(req.url.host==server.url("/").host)return@addInterceptor chain.proceed(req)
+                Response.Builder().request(req).protocol(Protocol.HTTP_1_1).code(if(case==0)200 else 206).message("Response")
+                    .header("Content-Range",if(case==1)"bytes 101-104/1000" else "bytes 100-103/1000")
+                    .apply{if(case==4)header("Content-Encoding","gzip")}
+                    .body(ByteArray(if(case==2)3 else if(case==3)5 else 4).toResponseBody()).build()
+            }.build()
+            assertThrows(Exception::class.java){YandexDiskClient({"test-token"},server.url("/v1/disk/"),http).rangeReadback("app:/pack.bin",100,4,1000)}
+            assertEquals(1,server.requestCount)
+        }
+    }
+    @Test fun `invalid range is rejected before any credential or network access`() {
+        var used=false
+        val client=YandexDiskClient({used=true;"test-token"})
+        listOf(Triple(-1L,4,1000L),Triple(999L,4,1000L),Triple(0L,0,1L),Triple(Long.MAX_VALUE,4,Long.MAX_VALUE)).forEach{(s,n,t)->
+            assertThrows(IllegalArgumentException::class.java){client.rangeReadback("app:/pack.bin",s,n,t)}
+        };assertFalse(used)
+    }
     @Test fun `metadata body failure retries the same GET once on a fresh connection`() {
         MockWebServer().use { server ->
             // A single loopback address keeps DNS route fallback from consuming the deliberate retry.

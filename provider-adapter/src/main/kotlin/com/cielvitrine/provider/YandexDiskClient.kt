@@ -162,6 +162,48 @@ class YandexDiskClient internal constructor(
         error("Too many download redirects")
     }
 
+    /** Strict partial transfer. A server ignoring Range is rejected before consuming its body. */
+    fun rangeReadback(path: String, start: Long, length: Int, total: Long): ByteArray {
+        require(start >= 0 && length in 1..8_388_636 && start < total && length.toLong() <= total - start)
+        val end = start + length - 1
+        var link = signedLink("resources/download", path, "GET")
+        val visited = mutableSetOf<HttpUrl>()
+        var sendAuthorization = true
+        val downloads = http.newBuilder().followRedirects(false).followSslRedirects(false).build()
+        repeat(6) {
+            check(isYandexTransferUrl(link) && visited.add(link)) { "Untrusted or looping download redirect" }
+            val request = Request.Builder().url(link).get().header("Range", "bytes=$start-$end")
+                .header("Accept-Encoding", "identity").apply {
+                    if (sendAuthorization) header("Authorization", authorization())
+                }.build()
+            val call = downloads.newCall(request)
+            call.timeout().timeout(75, TimeUnit.SECONDS)
+            call.execute().use { response ->
+                if (response.code in setOf(301, 302, 303, 307, 308)) {
+                    val next = response.header("Location")?.let(link::resolve) ?: error("Missing download redirect")
+                    check(isYandexTransferUrl(next)) { "Untrusted download redirect" }
+                    if (next.host != link.host) sendAuthorization = false
+                    link = next
+                } else {
+                    check(response.code == 206) { "Partial download unavailable (HTTP ${response.code})" }
+                    check(response.header("Content-Range") == "bytes $start-$end/$total") { "Incorrect range response" }
+                    check(response.header("Content-Encoding").let { it == null || it == "identity" })
+                    val body = response.body ?: error("Missing range body")
+                    check(body.contentLength() == -1L || body.contentLength() == length.toLong())
+                    return body.byteStream().use { input ->
+                        val bytes = ByteArray(length); var done = 0
+                        while (done < length) {
+                            val n = input.read(bytes, done, length - done)
+                            check(n > 0) { "Truncated range" }; done += n
+                        }
+                        check(input.read() == -1) { "Oversized range" }; bytes
+                    }
+                }
+            }
+        }
+        error("Too many download redirects")
+    }
+
     private fun signedLink(endpoint: String, path: String, method: String, extras: Map<String, String> = emptyMap()): HttpUrl {
         readMetadata(apiRequest(endpoint, mapOf("path" to path) + extras)) { response ->
             check(response.code == 200) { "Link request failed (HTTP ${response.code})" }

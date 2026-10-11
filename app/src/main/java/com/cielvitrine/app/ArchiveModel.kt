@@ -16,16 +16,19 @@ import kotlinx.coroutines.sync.withLock
 
 data class ArchiveUiState(val jobs: List<ArchiveJob> = emptyList(), val counts: ArchiveCounts = ArchiveCounts(emptyMap(), 0, 0),
     val batches: List<ArchiveBatch> = emptyList(), val paused: Boolean = false, val hasMore: Boolean = false,
-    val busy: Boolean = false, val message: String? = null, val olderPage: Boolean = false)
+    val busy: Boolean = false, val message: String? = null, val olderPage: Boolean = false, val tiles:Map<String,String> = emptyMap(),val benchmarkIds:Set<String> = emptySet())
 class ArchiveModel(app: Application) : AndroidViewModel(app) {
     private val context = app
     private val store = ArchiveStore(app)
     private val operations = Mutex()
+    private val measurementPreferences=app.getSharedPreferences("measurement-selection",android.content.Context.MODE_PRIVATE)
+    private var benchmarkIds=measurementPreferences.getStringSet("ids",emptySet())!!.filter{it.matches(TileCatalog.ID)}.take(240).toSet()
     private var beforeRow: Long? = null
     private var lastRow: Long? = null
     private val mutable = MutableStateFlow(ArchiveUiState())
     val state = mutable.asStateFlow()
-    init { viewModelScope.launch {
+    init { viewModelScope.launch {WorkManager.getInstance(context).getWorkInfosByTagFlow("gallery-tiles").collect{refresh()}}
+        viewModelScope.launch {
         try { withContext(Dispatchers.IO) { store.importLegacy(LegacyArchiveStore(context)) }; kick() }
         catch (_: Exception) { mutable.value = mutable.value.copy(message = "Журнал архива недоступен. Исходники сохранены; операции остановлены.") }
         refresh()
@@ -36,8 +39,9 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
             val cursor = beforeRow
             val updated = withContext(Dispatchers.IO) {
                 val rows = store.page(31, cursor)
-                rows.take(30).lastOrNull()?.first to ArchiveUiState(rows.take(30).map { it.second }, store.counts(), store.batches(), store.paused(), rows.size > 30,
-                    olderPage = cursor != null)
+                val jobs=rows.take(30).map { it.second }
+                rows.take(30).lastOrNull()?.first to ArchiveUiState(jobs, store.counts(), store.batches(), store.paused(), rows.size > 30,
+                    olderPage = cursor != null,tiles=jobs.filter{it.phase==ArchivePhase.VERIFIED && it.mime.startsWith("image/")}.associate{it.id to TileStore(context).status(it.id)},benchmarkIds=benchmarkIds)
             }
             if (beforeRow == cursor) { lastRow = updated.first; mutable.value = updated.second.copy(busy = mutable.value.busy, message = mutable.value.message) }
         } catch (e: CancellationException) { throw e }
@@ -50,6 +54,11 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
         }
     }
     fun accountConnected() { viewModelScope.launch { runCatching { kick() }; refresh() } }
+    fun prepareTiles(id:String)=perform("Готовим проверенные фрагменты для просмотра и увеличения. Оригинал сохранён.") {
+        val job=store.load(id);require(job.phase==ArchivePhase.VERIFIED && job.mime.startsWith("image/"))
+        val tiles=TileStore(context);tiles.load(id)?.let{it.requireJob(job);if(!it.ready)tiles.save(it.copy(deferred=false))}
+        TileWorker.enqueue(context,id)
+    }
     private fun perform(message: String, action: () -> Unit) {
         if (mutable.value.busy) return
         mutable.value = mutable.value.copy(busy = true, message = null)
@@ -78,6 +87,21 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
     fun prepareAll() = perform("Собираем все доступные фото и видео. Новые файлы после начала сканирования войдут в следующий запуск.") {
         require(store.batches().none { it.phase == ScanPhase.DISCOVERING })
         val batch = MediaInventory(context).snapshot(); store.createBatch(batch)
+    }
+    fun addSelected(items: List<MediaItem>) = perform("Выбранные файлы добавлены в холодный архив. Замеры начнутся при обработке очереди; оригиналы сохранены.") {
+        require(items.isNotEmpty() && items.size <= 240)
+        val inventory = MediaInventory(context)
+        val jobs = items.map { inventory.selected(it) }
+        jobs.forEach { inventory.requireUnchanged(it) }
+        measured(store.addSelected(jobs).toSet())
+    }
+    private fun measured(ids:Set<String>){require(ids.size<=240 && ids.all{it.matches(TileCatalog.ID)});benchmarkIds=ids
+        measurementPreferences.edit().putStringSet("ids",ids).apply()}
+    fun measure(id:String){measured(setOf(id));mutable.value=mutable.value.copy(benchmarkIds=benchmarkIds)}
+    suspend fun openCloud(id: String): MediaItem = withContext(Dispatchers.IO) {
+        val job = store.load(id)
+        val file = CloudOriginalReader(context).load(job)
+        job.mediaItem().copy(uri = Uri.fromFile(file), performanceId = job.id)
     }
     fun pause(paused: Boolean) = perform(if (paused) "Очередь приостановлена. Исходники и незавершённые контейнеры сохранены." else "Очередь продолжена.") { store.setPaused(paused) }
     fun resumeScan(id: String) = perform("Повторяем сканирование с сохранённой позиции.") {
