@@ -429,7 +429,7 @@ internal fun MediaThumb(item: MediaItem, modifier: Modifier = Modifier) {
     val bitmap by produceState<android.graphics.Bitmap?>(null, item.uri, item.binding, item.modifiedSeconds, item.generation, item.bytes) {
         value = null
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching { context.contentResolver.loadThumbnail(item.uri, android.util.Size(320, 320), null) }.getOrNull()
+            runCatching { CurrentThumbnail.load(context,item) }.getOrNull()
         }
     }
     Box(modifier.background(Mist), contentAlignment = Alignment.Center) {

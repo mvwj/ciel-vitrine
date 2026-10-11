@@ -25,7 +25,7 @@ internal fun openDisplayOriginal(context: Context, uri: Uri): InputStream {
     }) ?: error("Оригинальный формат недоступен")
     return OriginalInputStream(descriptor)
 }
-private fun displaySource(context:Context,uri:Uri):ImageDecoder.Source =
+internal fun displaySource(context:Context,uri:Uri):ImageDecoder.Source =
     if(uri.scheme=="file")ImageDecoder.createSource(java.io.File(uri.path ?: error("Файл недоступен")))
     else if(Build.VERSION.SDK_INT>=31 && uri.authority==MediaStore.AUTHORITY) ImageDecoder.createSource(java.util.concurrent.Callable {
         context.contentResolver.openTypedAssetFileDescriptor(uri,"*/*",Bundle().apply {

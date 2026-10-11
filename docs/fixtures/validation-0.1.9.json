@@ -11,7 +11,8 @@
   },
   "phone": {
     "api": 36, "model": "Android test device", "tests": 27, "failures": 0,
-    "time_seconds": 30.065, "personal_originals_deleted": 0
+    "time_seconds": 28.129, "personal_originals_deleted": 0,
+    "previous_run_before_thumbnail_fix_seconds": 30.065
   },
   "real_yandex_partial_transport": {
     "fixture": "generated Ultra HDR JPEG 1280x960",
@@ -28,8 +29,8 @@
     "visible_range_ms": 6887.704216, "cached_region_ms": 2706.788644
   },
   "apk": {
-    "bytes": 75656527,
-    "sha256": "BE1F824FDF24EF813319595F9EAB3FF564B9A660E1D13AA35F9814C5132462DF"
+    "bytes": 75663455,
+    "sha256": "EEC900284E1D03D999A1C1F3B6E94B7026E1A842414900CB3E451022BF23B931"
   },
   "selected_user_file_benchmark_completed": false,
   "partial_transport_scope": "static native-region-decodable photographs",
