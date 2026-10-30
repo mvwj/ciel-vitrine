@@ -8,8 +8,10 @@ import java.io.InputStream
 import java.io.OutputStream
 
 @Serializable enum class ArchivePhase { QUEUED, PREPARED, UPLOAD_UNCERTAIN, VERIFIED, SOURCE_ERROR, UNSUPPORTED_SIZE }
-@Serializable enum class OriginalZone { COLD, GALLERY }
+@Serializable enum class OriginalZone { COLD, GALLERY, VIEW }
 @Serializable enum class ContainerExtension(val suffix: String) { CV2(".cv2"), BIN(".bin") }
+@Serializable enum class OriginalTransport { SINGLE, MULTIPART }
+@Serializable data class MultipartCommit(val root: ArchiveProof, val parts: Long)
 @Serializable data class SourceStamp(val volume: String, val epoch: String, val mediaId: Long,
     val generation: Long?, val modifiedSeconds: Long, val bytes: Long?, val width: Int, val height: Int,
     val durationMillis: Long, val capturedAt: Long?)
@@ -25,7 +27,8 @@ import java.io.OutputStream
     val zone: OriginalZone = OriginalZone.COLD, val groupId: String? = null, val coldId: String? = null,
     val deferred: Boolean = false, val createdAt: Long = 0,
     // Missing in older journals: keep their original path, including uncertain uploads.
-    val containerExtension: ContainerExtension = ContainerExtension.CV2) {
+    val containerExtension: ContainerExtension = ContainerExtension.CV2,
+    val transport: OriginalTransport = OriginalTransport.SINGLE, val multipart: MultipartCommit? = null) {
     val path get() = "app:/ciel-vitrine-v2/${if (zone == OriginalZone.COLD) "cold" else "gallery"}/$id${containerExtension.suffix}"
     fun validate() {
         require(id.matches(Regex("[0-9a-f]{32}")) && ((uid == null && rootId == null) ||
@@ -38,10 +41,17 @@ import java.io.OutputStream
         require(listOfNotNull(batchId, groupId, coldId).all { it.matches(Regex("[0-9a-f]{32}")) })
         if (zone == OriginalZone.GALLERY) require(groupId != null && coldId != null)
         if (phase in setOf(ArchivePhase.PREPARED, ArchivePhase.UPLOAD_UNCERTAIN, ArchivePhase.VERIFIED)) require(proof != null && uid != null && rootId != null)
-        proof?.let { require(it.originalBytes in 0..ColdArchive.MAX_BYTES && it.containerBytes in 1..(ColdArchive.MAX_BYTES + 262144))
+        proof?.let { require(it.originalBytes >= 0 && it.containerBytes > 0)
+            if(transport == OriginalTransport.SINGLE) require(it.originalBytes <= MAX_SINGLE_BYTES && it.containerBytes <= MAX_SINGLE_BYTES + 262144)
             it.times?.validate()
             require(it.bundleId.matches(Regex("[0-9a-f]{32}")) && listOf(it.originalSha256, it.containerSha256).all { h -> h.matches(Regex("[0-9a-f]{64}")) }) }
         if (phase == ArchivePhase.VERIFIED) require(!remoteId.isNullOrBlank() && !remoteModified.isNullOrBlank() && verifiedAt != null)
+        multipart?.let { require(transport == OriginalTransport.MULTIPART && it.parts > 0 && proof != null)
+            require(it.root.originalBytes in 1..MultipartFormat.MANIFEST_MAX_BYTES && it.root.containerBytes in 1..MultipartFormat.MANIFEST_MAX_BYTES + 262144)
+            require(it.root.bundleId == proof.bundleId && it.root.containerSha256 == proof.containerSha256 && it.root.containerBytes == proof.containerBytes)
+        }
+        if(transport == OriginalTransport.MULTIPART) require(containerExtension == ContainerExtension.BIN)
+        if(transport == OriginalTransport.MULTIPART && phase == ArchivePhase.VERIFIED) require(multipart != null)
     }
 }
 
@@ -65,7 +75,7 @@ interface ArchiveStaging {
     fun open(id: String): InputStream
     fun removeOwnedContainer(id: String)
 }
-data class ArchiveRemote(val id: String, val modified: String, val bytes: Long, val sha256: String?)
+@Serializable data class ArchiveRemote(val id: String, val modified: String, val bytes: Long, val sha256: String?)
 interface ArchiveCloud {
     fun requireAccount(uid: String, rootId: String)
     fun ensureColdFolders()
@@ -82,6 +92,7 @@ class ColdArchive(private val journal: ArchiveJournal, private val staging: Arch
     /** Caller holds an interprocess job lock. One phase per call allows safe process restart. */
     fun step(id: String): ArchiveJob {
         var job = journal.load(id).also { it.validate() }
+        require(job.transport == OriginalTransport.SINGLE)
         check(!stopped())
         if (job.phase == ArchivePhase.VERIFIED) { staging.removeOwnedContainer(id); return job }
         if (job.phase in setOf(ArchivePhase.SOURCE_ERROR, ArchivePhase.UNSUPPORTED_SIZE) || job.deferred) return job
@@ -155,17 +166,18 @@ class ColdArchive(private val journal: ArchiveJournal, private val staging: Arch
             require(before.id == member.remoteId && before.modified == member.remoteModified && before.bytes == expected.containerBytes &&
                 (before.sha256 == null || before.sha256.equals(expected.containerSha256, true)))
             if (fullReadback) {
-                val recovered = cloud.readback(member.path) { Pos2.read(it, Sink, expected.originalBytes, expected.originalSha256, MAX_BYTES) }
-                require(ArchiveProof.from(recovered) == expected && cloud.inspect(member.path) == before)
+                verifyArchivedOriginal(member,cloud,stopped)
+                require(cloud.inspect(member.path) == before)
             }
         }
     }
     companion object {
-        // Single-object prototype limit; multipart and automatic Live Photo identification follow separately.
-        const val MAX_BYTES = 128L * 1024 * 1024
+        const val MAX_BYTES = MAX_SINGLE_BYTES
         val Sink: OutputStream = object : OutputStream() {
             override fun write(b: Int) {}
             override fun write(b: ByteArray, off: Int, len: Int) {}
         }
     }
 }
+/** Compatibility budget for existing single-object journals, never a new-source admission limit. */
+const val MAX_SINGLE_BYTES = 128L * 1024 * 1024

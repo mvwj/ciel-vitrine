@@ -10,6 +10,7 @@ import java.io.*
 import java.nio.ByteBuffer
 import java.util.zip.DeflaterOutputStream
 import java.util.zip.Inflater
+import java.util.zip.InflaterInputStream
 
 /** Lossless native raster transport. No JPEG recompression or HDR-to-SDR conversion. */
 internal object TileRaster {
@@ -18,7 +19,7 @@ internal object TileRaster {
     fun encode(bitmap: Bitmap): ByteArray {
         val raw = ByteArrayOutputStream()
         DataOutputStream(raw).use { out ->
-            out.writeInt(MAGIC); writeBitmap(out, bitmap)
+            out.writeInt(MAGIC); writeBitmap(out, bitmap,true)
             val hdr = Build.VERSION.SDK_INT >= 34 && bitmap.hasGainmap()
             out.writeBoolean(hdr)
             if (hdr) writeGainmap(out, bitmap.gainmap!!)
@@ -30,22 +31,31 @@ internal object TileRaster {
     }
     fun decode(packed: ByteArray): Bitmap {
         require(packed.size in 1..MAX_BYTES)
-        val raw = ByteArrayOutputStream()
         val inflater=Inflater()
-        try { inflater.setInput(packed);val buffer=ByteArray(16384)
-            while(!inflater.finished()){val n=inflater.inflate(buffer);if(n==0){require(inflater.finished());break}
-                require(n>0 && raw.size()+n<=MAX_BYTES);raw.write(buffer,0,n)}
-            require(inflater.remaining==0)
-        } finally {inflater.end()}
-        return DataInputStream(ByteArrayInputStream(raw.toByteArray())).use { input ->
+        val compressed=ByteArrayInputStream(packed)
+        try {
+        val inflated=InflaterInputStream(compressed,inflater)
+        val bounded=object:FilterInputStream(inflated) {
+            var total=0L
+            override fun read():Int { val value=`in`.read();if(value>=0){total++;require(total<=MAX_BYTES)};return value }
+            override fun read(b:ByteArray,off:Int,len:Int):Int { val n=`in`.read(b,off,len);if(n>0){total+=n;require(total<=MAX_BYTES)};return n }
+        }
+        return DataInputStream(bounded).use { input ->
             require(input.readInt() == MAGIC)
-            val bitmap = readBitmap(input)
+            val budget=RasterReadBudget()
+            val bitmap = readBitmap(input,true,budget)
+            try {
             if (input.readBoolean()) {
-                if(Build.VERSION.SDK_INT >= 34) bitmap.gainmap = readGainmap(input)
+                if(Build.VERSION.SDK_INT >= 34) {
+                    val gain=readGainmap(input,budget)
+                    try{bitmap.gainmap=gain}catch(e:Exception){gain.gainmapContents.recycleViewerRaster();throw e}
+                }
                 else error("HDR raster requires Android 14")
             }
-            require(input.read() == -1); bitmap
+            require(input.read() == -1 && inflater.finished() && inflater.remaining==0 && compressed.available()==0); bitmap
+            } catch(e:Exception){bitmap.recycleViewerRaster();throw e}
         }
+        } finally {inflater.end()}
     }
     private fun color(space: ColorSpace?): JSONObject {
         if (space == null) return JSONObject().put("none",true)
@@ -82,27 +92,44 @@ internal object TileRaster {
         val size=input.readInt();require(size in 2..16384)
         return JSONObject(ByteArray(size).also(input::readFully).toString(Charsets.UTF_8))
     }
-    private fun writeBitmap(out:DataOutputStream,bitmap:Bitmap) {
+    private fun writeBitmap(out:DataOutputStream,bitmap:Bitmap,base:Boolean=false) {
         val config=bitmap.config ?: error("Unknown raster config");val bpp=bytesPerPixel(config)
-        require(bitmap.width in 1..514 && bitmap.height in 1..514 && bitmap.byteCount <= MAX_BYTES)
+        val edge=if(base)514 else 32768
+        require(bitmap.width in 1..edge && bitmap.height in 1..edge && bitmap.byteCount <= MAX_BYTES)
         writeJson(out,JSONObject().put("width",bitmap.width).put("height",bitmap.height).put("config",config.name)
             .put("color",color(bitmap.colorSpace)).put("alpha",bitmap.hasAlpha()).put("premultiplied",bitmap.isPremultiplied).put("density",bitmap.density))
         val pixels=ByteBuffer.allocate(bitmap.byteCount);bitmap.copyPixelsToBuffer(pixels)
         val row=bitmap.width*bpp
         for(y in 0 until bitmap.height)out.write(pixels.array(),y*bitmap.rowBytes,row)
     }
-    private fun readBitmap(input:DataInputStream):Bitmap {
+    private class RasterReadBudget {
+        var bytes=0L
+        fun reserve(w:Int,h:Int,bpp:Int):Long {
+            val size=((w.toLong()*bpp+3)/4*4)*h
+            bytes+=size
+            // The transport cap excludes native row padding. Include that bounded padding.
+            require(bytes<=MAX_BYTES+128L*1024)
+            return size
+        }
+    }
+    private fun readBitmap(input:DataInputStream,base:Boolean=false,budget:RasterReadBudget):Bitmap {
         val json=readJson(input);val w=json.getInt("width");val h=json.getInt("height")
-        require(w in 1..514 && h in 1..514)
+        val edge=if(base)514 else 32768
+        require(w in 1..edge && h in 1..edge)
         val config=Bitmap.Config.valueOf(json.getString("config"));val bpp=bytesPerPixel(config)
+        // Gainmaps need not have the base image's resolution. Bound bytes before allocating.
+        require(w.toLong()*h*bpp<=MAX_BYTES)
+        val allocation=budget.reserve(w,h,bpp)
         val space=color(json.getJSONObject("color"))
         val bitmap=if(config==Bitmap.Config.ALPHA_8) Bitmap.createBitmap(w,h,config)
             else Bitmap.createBitmap(w,h,config,json.getBoolean("alpha"),space ?: ColorSpace.get(ColorSpace.Named.SRGB))
+        try {
         bitmap.setHasAlpha(json.getBoolean("alpha"));bitmap.isPremultiplied=json.getBoolean("premultiplied");bitmap.density=json.getInt("density")
-        require(bitmap.byteCount <= MAX_BYTES)
+        require(bitmap.byteCount <= allocation)
         val pixels=ByteArray(bitmap.byteCount);val row=w*bpp
         for(y in 0 until h)input.readFully(pixels,y*bitmap.rowBytes,row)
         bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(pixels));return bitmap
+        } catch(e:Exception){bitmap.recycleViewerRaster();throw e}
     }
     @androidx.annotation.RequiresApi(34)
     private fun writeGainmap(out:DataOutputStream,g:Gainmap) {
@@ -113,8 +140,9 @@ internal object TileRaster {
         writeJson(out,j);writeBitmap(out,g.gainmapContents)
     }
     @androidx.annotation.RequiresApi(34)
-    private fun readGainmap(input:DataInputStream):Gainmap {
-        val j=readJson(input);val g=Gainmap(readBitmap(input))
+    private fun readGainmap(input:DataInputStream,budget:RasterReadBudget):Gainmap {
+        val j=readJson(input);val g=Gainmap(readBitmap(input,budget=budget))
+        try {
         fun values(name:String):FloatArray {val a=j.getJSONArray(name);require(a.length()==3)
             return FloatArray(3){a.getDouble(it).toFloat().also{v->require(v.isFinite())}}}
         values("min").let{g.setRatioMin(it[0],it[1],it[2])};values("max").let{g.setRatioMax(it[0],it[1],it[2])}
@@ -126,5 +154,6 @@ internal object TileRaster {
             else error("Gainmap extensions require Android 16")
         }
         return g
+        } catch(e:Exception){g.gainmapContents.recycleViewerRaster();throw e}
     }
 }

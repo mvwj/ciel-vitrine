@@ -12,7 +12,7 @@ import java.io.InputStream
 
 internal object OriginalDatePolicy {
     fun capture(context: Context, uri: Uri, input: InputStream): OriginalTimes {
-        val fd = when (input) { is OriginalInputStream -> input.sourceDescriptor; is FileInputStream -> input.fd; else -> null }
+        val fd = when (input) { is OriginalDescriptorOwner -> input.sourceDescriptor; is FileInputStream -> input.fd; else -> null }
         val stat = fd?.let { Os.fstat(it) }?.takeIf { OsConstants.S_ISREG(it.st_mode) }
         var seconds = stat?.st_mtim?.tv_sec; var nanos = stat?.st_mtim?.tv_nsec?.toInt()
         var added: Long? = null; var taken: Long? = null

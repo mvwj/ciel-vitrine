@@ -255,13 +255,13 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                     item { ZoneCard("01", "Холодный архив", "Точные исходные файлы. Отдельный жизненный цикл, восстановление без личного ключа.", Icons.Outlined.Inventory2) }
                     item { ZoneCard("02", "Рабочая галерея", "Отдельные оригиналы уже можно создать из архива. Миниатюры и открытие из облака — следующий этап.", Icons.Outlined.PhotoLibrary) }
                     item { InfoCard("Освобождение места — отдельное действие", "Загрузка не удаляет оригиналы с телефона. Удаление будет доступно после проверки копий и подтверждения Android.", Icons.Outlined.VerifiedUser) }
-                    item { InfoCard("Архивировать доступную медиатеку", "Подготовьте очередь до входа в Яндекс. Учтём все доступные фото и видео, включая большие файлы. Загрузка сейчас поддерживает файлы до 128 МиБ. Если Android разрешил только часть медиатеки, архивируем эту часть.", Icons.Outlined.Inventory2,
+                    item { InfoCard("Архивировать доступную медиатеку", "Подготовьте очередь до входа в Яндекс. Учтём все доступные фото и видео, включая большие файлы. Большие файлы загружаются проверяемыми частями без пересжатия. Если Android разрешил только часть медиатеки, архивируем эту часть.", Icons.Outlined.Inventory2,
                         if (!archive.busy) (if (state.access == MediaAccess.NONE) "Разрешить доступ" else "Подготовить все фото и видео") else null,
                         { if (state.access == MediaAccess.NONE) requestMedia() else allInfo = true }) }
                     item { InfoCard("Сохранить отдельный файл", "Добавить файл можно до входа. Загружаем без пересжатия и полностью читаем обратно в сети без тарификации. Исходник остаётся на телефоне.", Icons.Outlined.FolderOpen,
                         if (!archive.busy) "Выбрать файл" else null,
                         { coldInfo = true }) }
-                    item { InfoCard("Очередь: ${archive.counts.total}", "Проверено: ${archive.counts.verified} · приостановлено: ${archive.counts.deferred} · свыше лимита: ${archive.counts.phases[com.cielvitrine.archive.ArchivePhase.UNSUPPORTED_SIZE] ?: 0}. Рабочих копий в очереди: ${archive.counts.gallery}.", Icons.Outlined.Schedule,
+                    item { InfoCard("Очередь: ${archive.counts.total}", "Проверено: ${archive.counts.verified} · приостановлено: ${archive.counts.deferred}. Рабочих копий в очереди: ${archive.counts.gallery}.", Icons.Outlined.Schedule,
                         if (!archive.busy) (if (archive.paused) "Продолжить очередь" else "Приостановить очередь") else null,
                         { archiveModel.pause(!archive.paused) }) }
                     archive.batches.forEach { batch -> item(key = batch.id) {
@@ -284,7 +284,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                                     com.cielvitrine.archive.ArchivePhase.UPLOAD_UNCERTAIN -> "Загрузка отправлена или могла начаться. Ожидает полного обратного чтения"
                                     com.cielvitrine.archive.ArchivePhase.VERIFIED -> "Копия прочитана полностью. SHA-256 и длина совпали"
                                     com.cielvitrine.archive.ArchivePhase.SOURCE_ERROR -> "Исходный файл недоступен"
-                                    com.cielvitrine.archive.ArchivePhase.UNSUPPORTED_SIZE -> "Файл учтён; загрузка свыше 128 МиБ пока недоступна"
+                                    com.cielvitrine.archive.ArchivePhase.UNSUPPORTED_SIZE -> "Файл ожидает перевода на загрузку частями"
                                 }, style = MaterialTheme.typography.bodyMedium)
                                 Text("${if (job.zone == com.cielvitrine.archive.OriginalZone.COLD) "Холодный архив" else "Рабочая копия"} · ${job.sourceBytes?.let { "$it байт" } ?: "размер уточняется"}", style = MaterialTheme.typography.bodySmall)
                                 Text("${job.uid?.let { "Аккаунт Яндекса: $it" } ?: "Аккаунт будет привязан перед первой загрузкой"} · исходник сохранён", style = MaterialTheme.typography.bodySmall)
@@ -310,6 +310,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                     if (archive.olderPage) item { TextButton(onClick = { archiveModel.first() }, modifier = Modifier.padding(horizontal = 24.dp)) { Text("К новым записям") } }
                 }
                 Destination.SETTINGS -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    item { PlaybackSettingsCard() }
                     item { InfoCard("Восстановление без личного ключа", "Оригиналы хранятся в обратимом контейнере. Облако технически может прочитать их, включая встроенные GPS и EXIF. Это выбранная политика восстановления.", Icons.Outlined.Key) }
                     item { InfoCard("Переносимый оригинал", "Сохраняет байты фотографии и доступные исходные даты. Повторно читает результат для проверки. Восстановление без личного ключа; старые архивы поддерживаются. Исходник остаётся на телефоне.", Icons.Outlined.FactCheck, "Открыть инструменты", { archiveInfo = true }) }
                     item { InfoCard("Корзина на 60 дней", "Будущая корзина галереи сохранит область удаления. Холодный архив удаляется только отдельным выбором. Последняя копия не исчезает по таймеру без разрешения.", Icons.Outlined.DeleteOutline) }
@@ -325,7 +326,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
         val pages=if(item.cloudId!=null)archive.jobs.filter{it.phase==com.cielvitrine.archive.ArchivePhase.VERIFIED}.map{it.mediaItem()}
             else filtered.map{local-> archive.jobs.firstOrNull{it.zone==com.cielvitrine.archive.OriginalZone.COLD && it.matches(local)}?.let{job->local.copy(performanceId=job.id)}?:local}
         GalleryViewer(pages,item,close={selected=null},isFavorite={state.favorites.containsMedia(it)},favorite={model.favorite(it)},
-            album={selected=it;addAlbum=true},changed={selected=it},resolveCloud={archiveModel.openCloud(it.cloudId!!)})
+            album={selected=it;addAlbum=true},changed={selected=it})
     }
     if (addAlbum) {
         var name by remember { mutableStateOf("") }

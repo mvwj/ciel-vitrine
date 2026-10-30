@@ -13,6 +13,33 @@ import java.security.MessageDigest
 import java.util.UUID
 
 class ReaderShareTest {
+    @Test fun `export rejects existing source aliases and preserves all original bytes`() {
+        val directory = java.nio.file.Files.createTempDirectory("export-alias-").toFile()
+        try {
+            val bytes = ByteArray(1024) { (it * 7).toByte() }
+            val source = File(directory, "original.pos")
+            source.outputStream().use { PosWriter.write(bytes.inputStream(), it, ByteArray(16)) }
+            val encoded = source.readBytes()
+            val rv = ResourceVersion("v", "r", "a", SourceRepresentationKind.EXACT_ORIGINAL,
+                bytes.size.toLong(), sha256Hex(bytes), 0)
+            val hardlink = File(directory, "hardlink.pos")
+            java.nio.file.Files.createLink(hardlink.toPath(), source.toPath())
+            val existing = File(directory, "existing.bin").apply { writeText("keep me") }
+            PosFileExactReader(rv, source).use { reader ->
+                for (destination in listOf(source, File(directory, "./original.pos"), hardlink, existing)) {
+                    assertThrows(java.nio.file.FileAlreadyExistsException::class.java) {
+                        ShareExportService.exportAndVerifyFile(reader, destination)
+                    }
+                    assertArrayEquals(encoded, source.readBytes())
+                }
+                assertEquals("keep me", existing.readText())
+                val output = File(directory, "restored.bin")
+                assertTrue(ShareExportService.exportAndVerifyFile(reader, output).isDestinationVerified)
+                assertArrayEquals(bytes, output.readBytes())
+            }
+        } finally { directory.deleteRecursively() }
+    }
+
     @Test fun `corrupt footer reaches sequential consumer instead of successful EOF`() {
         val bytes = ByteArray(500) { it.toByte() }
         val file = File.createTempFile("corrupt-footer", ".pos").apply { deleteOnExit() }

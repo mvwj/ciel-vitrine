@@ -20,62 +20,51 @@ internal fun ArchiveJob.matches(item:MediaItem):Boolean=runCatching {
         stamp.generation==item.generation && stamp.bytes==item.bytes && stamp.modifiedSeconds==item.modifiedSeconds
 }.getOrDefault(false)
 
-/** Whole-object recovery to a private display cache. Never overwrites or deletes a source. */
-internal class CloudOriginalReader(private val context: Context,
-    private val directory: File = File(context.cacheDir, "cloud-view")) {
-    fun load(job: ArchiveJob, provider: ArchiveCloud? = null): File = synchronized(guard) {
+/** Whole-object recovery is explicit preparation/recovery, never the static-photo zoom path.
+ * The caller must retain the lease until every consumer has closed the file. */
+internal class CloudOriginalReader(private val context: Context) {
+    fun acquire(job: ArchiveJob, provider: ArchiveCloud? = null,
+        cancel: com.cielvitrine.archive.viewer.ViewCancellation = com.cielvitrine.archive.viewer.ViewCancellation()): com.cielvitrine.archive.viewer.OwnedViewCache.Lease {
         job.validate(); require(job.phase == ArchivePhase.VERIFIED)
-        val proof = job.proof!!
         val cloud = provider ?: YandexSessionStore(context).load()?.let { saved ->
             require(saved.uid == job.uid && saved.appRootId == job.rootId)
             YandexArchiveCloud(context, saved)
         } ?: error("Подключите прежний аккаунт Яндекса")
-        check(directory.isDirectory || directory.mkdirs())
-        val output = File(directory, "${job.id}-${proof.originalSha256}.original")
-        val metrics = PerformanceJournal(context)
-        if (output.exists() && metrics.timed(job.id, "cache_read") { matches(output, proof) }) return output
-        // Cache eviction is limited to this owned directory; no gallery or device original is touched.
-        val budget = 384L * 1024 * 1024
-        directory.listFiles()?.filter { it != output && it.name.matches(Regex("[0-9a-f]{32}-[0-9a-f]{64}\\.original")) }
-            ?.sortedBy { it.lastModified() }?.forEach { old ->
-                if ((directory.listFiles()?.sumOf { it.length() } ?: 0) + 2 * proof.containerBytes > budget) old.delete()
-            }
-        check(directory.usableSpace > proof.containerBytes + proof.originalBytes + 64L * 1024 * 1024) { "Недостаточно места для проверенного просмотра" }
-        val downloaded = File.createTempFile("container-", ".partial", directory)
-        val restored = File.createTempFile("original-", ".partial", directory)
-        try {
-            cloud.requireAccount(job.uid!!, job.rootId!!)
-            val before = cloud.inspect(job.path) ?: error("Облачная копия недоступна")
-            require(before.id == job.remoteId && before.modified == job.remoteModified && before.bytes == proof.containerBytes &&
-                (before.sha256 == null || before.sha256.equals(proof.containerSha256, true)))
-            metrics.timed(job.id, "download") {
-                cloud.readback(job.path) { input -> FileOutputStream(downloaded).use { out ->
-                    val buffer = ByteArray(65536); var bytes = 0L
-                    while (true) { val n = input.read(buffer); if (n < 0) break; require(n > 0)
-                        bytes += n; require(bytes <= proof.containerBytes); out.write(buffer, 0, n) }
-                    require(bytes == proof.containerBytes); out.fd.sync()
-                } }
-            }
-            metrics.timed(job.id, "restore") {
-                val recovered = downloaded.inputStream().use { input -> FileOutputStream(restored).use { out ->
-                    Pos2.read(input, out, proof.originalBytes, proof.originalSha256, ColdArchive.MAX_BYTES).also { out.fd.sync() }
-                } }
-                require(ArchiveProof.from(recovered) == proof && matches(restored, proof))
-                OriginalDatePolicy.restore(context, Uri.fromFile(restored), proof.times)
-                require(cloud.inspect(job.path) == before)
-                cloud.requireAccount(job.uid!!, job.rootId!!)
-            }
-            android.system.Os.rename(restored.path, output.path)
-            output
-        } finally { downloaded.delete(); restored.delete() }
-    }
-    private fun matches(file: File, proof: ArchiveProof): Boolean {
-        if (file.length() != proof.originalBytes) return false
-        val hash = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input -> val buffer = ByteArray(65536)
-            while (true) { val n = input.read(buffer); if (n < 0) break; require(n > 0); hash.update(buffer, 0, n) }
+        cloud.requireAccount(job.uid!!, job.rootId!!)
+        val proof = job.proof!!; val cache = ViewerRuntime.cache(context)
+        val snapshot = ViewerRuntime.snapshot(job, "original-recovery-v2")
+        val key = snapshot.key("plaintext:${proof.originalSha256}")
+        cancel.check()
+        cache.acquire(key)?.let { lease ->
+            try { require(matches(lease.file, proof)); cancel.check(); return cleanupPreference(lease) }
+            catch (e: Exception) { cache.discard(key); lease.close(); throw e }
         }
-        return hash.digest().joinToString("") { "%02x".format(it) } == proof.originalSha256
+        val lease = cache.put(key, proof.originalBytes, cancel) { output ->
+            if (job.transport == OriginalTransport.MULTIPART) {
+                MultipartSession(context, job, cloud, clearOnClose = true).use { it.restore(output) }
+            } else {
+                val before = cloud.inspect(job.path) ?: error("Облачная копия недоступна")
+                require(before.id == job.remoteId && before.modified == job.remoteModified && before.bytes == proof.containerBytes &&
+                    (before.sha256 == null || before.sha256.equals(proof.containerSha256, true)))
+                // output is unpublished owned scratch. A failing tag/footer/hash/length removes
+                // it, so recovery needs no second full-sized encrypted cache object.
+                val recovered = cloud.readback(job.path) { input ->
+                    val checked = object: java.io.FilterInputStream(input) {
+                        override fun read(): Int { cancel.check(); return `in`.read() }
+                        override fun read(b: ByteArray, off: Int, len: Int): Int { cancel.check(); return `in`.read(b, off, len) }
+                    }
+                    Pos2.read(checked, output, proof.originalBytes, proof.originalSha256, ColdArchive.MAX_BYTES)
+                }
+                require(ArchiveProof.from(recovered) == proof && cloud.inspect(job.path) == before)
+            }
+            cloud.requireAccount(job.uid!!, job.rootId!!)
+        }
+        try {
+            require(matches(lease.file, proof)); OriginalDatePolicy.restore(context, Uri.fromFile(lease.file), proof.times)
+            return cleanupPreference(lease)
+        } catch (e: Exception) { cache.discard(key); lease.close(); throw e }
     }
-    companion object { private val guard = Any() }
+    private fun matches(file: File, proof: ArchiveProof): Boolean = file.length() == proof.originalBytes && tileFileHash(file) == proof.originalSha256
+    private fun cleanupPreference(lease: com.cielvitrine.archive.viewer.OwnedViewCache.Lease) =
+        if(PlaybackPreferences(context).clearAfterViewing)lease.disposeWhenIdle() else lease
 }

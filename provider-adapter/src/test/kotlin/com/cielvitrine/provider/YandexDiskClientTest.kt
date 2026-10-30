@@ -14,6 +14,25 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.Assertions.*
 
 class YandexDiskClientTest {
+    @Test fun `range transient failures get two retries and never replay the link or a PUT`() {
+        for (recover in listOf(false,true)) MockWebServer().use { server ->
+            server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/file","method":"GET","templated":false}"""))
+            var requests=0
+            val http=OkHttpClient.Builder().retryOnConnectionFailure(false).addInterceptor { chain ->
+                val request=chain.request()
+                if(request.url.host==server.url("/").host)return@addInterceptor chain.proceed(request)
+                assertEquals("GET",request.method);assertEquals("bytes=100-103",request.header("Range"))
+                requests++
+                val status=if(recover && requests==3)206 else if(requests==1)429 else 503
+                Response.Builder().request(request).protocol(Protocol.HTTP_1_1).code(status).message("Fixture")
+                    .header("Content-Range","bytes 100-103/1000").body(byteArrayOf(1,2,3,4).toResponseBody()).build()
+            }.build()
+            val client=YandexDiskClient({"test-token"},server.url("/v1/disk/"),http)
+            if(recover)assertArrayEquals(byteArrayOf(1,2,3,4),client.rangeReadback("app:/pack.bin",100,4,1000))
+            else assertThrows(IOException::class.java){client.rangeReadback("app:/pack.bin",100,4,1000)}
+            assertEquals(3,requests);assertEquals(1,server.requestCount)
+        }
+    }
     @Test fun `range transfer returns only exact bytes and retains range across a trusted redirect without OAuth`() {
         MockWebServer().use { server ->
             server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/file","method":"GET","templated":false}"""))
@@ -66,13 +85,13 @@ class YandexDiskClientTest {
             assertEquals(0, requests[1].sequenceNumber)
         }
     }
-    @Test fun `persistent metadata failure stops after two GETs`() {
+    @Test fun `persistent metadata failure stops after three GETs`() {
         MockWebServer().use { server ->
             server.start(java.net.InetAddress.getByName("127.0.0.1"), 0)
-            repeat(2) { server.enqueue(MockResponse().setBody("{}      ").setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)) }
+            repeat(3) { server.enqueue(MockResponse().setBody("{}      ").setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)) }
             val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/").newBuilder().host("127.0.0.1").build(), OkHttpClient.Builder().retryOnConnectionFailure(false).build())
             assertThrows(IOException::class.java) { client.inspect("app:/original.bin") }
-            assertEquals(2, server.requestCount)
+            assertEquals(3, server.requestCount)
         }
     }
     @Test fun `metadata recovery never repeats a failed directory PUT`() {
@@ -218,11 +237,13 @@ class YandexDiskClientTest {
         MockWebServer().use { server ->
             val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), OkHttpClient())
             listOf(404 to ProviderObjectPresence.NOT_AT_EXPECTED_PATH, 401 to ProviderObjectPresence.ACCESS_DENIED, 403 to ProviderObjectPresence.ACCESS_DENIED, 503 to ProviderObjectPresence.UNKNOWN).forEach { (code, expected) ->
-                server.enqueue(MockResponse().setResponseCode(code))
+                repeat(if(code == 503)3 else 1) { server.enqueue(MockResponse().setResponseCode(code)) }
                 assertEquals(expected, client.inspect("app:/Холодный архив/a.pos").presence)
-                val request = server.takeRequest()
-                assertEquals("app:/Холодный архив/a.pos", request.requestUrl!!.queryParameter("path"))
-                assertEquals("OAuth test-token", request.getHeader("Authorization"))
+                repeat(if(code == 503)3 else 1) {
+                    val request = server.takeRequest()
+                    assertEquals("app:/Холодный архив/a.pos", request.requestUrl!!.queryParameter("path"))
+                    assertEquals("OAuth test-token", request.getHeader("Authorization"))
+                }
             }
         }
     }

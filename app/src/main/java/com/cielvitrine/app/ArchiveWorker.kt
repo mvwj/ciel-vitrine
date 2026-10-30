@@ -34,8 +34,18 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
                                 cloud.requireAccount(saved.uid, saved.appRootId!!)
                                 store.save(job.copy(uid = saved.uid, rootId = saved.appRootId))
                             }
-                            val stage = when (job.phase) { ArchivePhase.QUEUED -> "prepare"; ArchivePhase.PREPARED -> "upload"; else -> "verify" }
-                            PerformanceJournal(applicationContext).timed(job.id, stage) { engine.step(job.id) }
+                            if(job.transport == OriginalTransport.MULTIPART) {
+                                setForegroundAsync(mediaForeground(applicationContext,101,"Сохраняем оригиналы частями")).get()
+                                val bound = store.load(job.id)
+                                val multipart = AndroidMultipartStore(applicationContext, bound)
+                                val source = AndroidMultipartStaging(applicationContext, bound, store, cloud, stopping)
+                                MultipartArchive(store, multipart, source, cloud, stopping, timed = { stage, action ->
+                                    PerformanceJournal(applicationContext).timed(job.id, stage, action)
+                                }).step(job.id)
+                            } else {
+                                val stage = when (job.phase) { ArchivePhase.QUEUED -> "prepare"; ArchivePhase.PREPARED -> "upload"; else -> "verify" }
+                                PerformanceJournal(applicationContext).timed(job.id, stage) { engine.step(job.id) }
+                            }
                             val completed=store.load(job.id)
                             if(completed.phase==ArchivePhase.VERIFIED && completed.mime.startsWith("image/"))TileWorker.enqueue(applicationContext,job.id)
                             setProgressAsync(workDataOf("phase" to store.load(job.id).phase.name))
@@ -135,7 +145,12 @@ internal class AndroidArchiveStaging(private val context: Context, private val s
             return ArchiveProof.from(written)
         } finally { for (owned in listOf(temp, download)) if (owned.exists()) check(owned.delete()) }
     }
-    override fun open(id: String) = stopAware(file(id).inputStream())
+    override fun open(id: String): InputStream {
+        val owned = file(id); val lease = ViewerRuntime.source(android.net.Uri.fromFile(owned).toString())
+        try { return object: FilterInputStream(stopAware(owned.inputStream())) {
+            override fun close() { try { super.close() } finally { lease.close() } }
+        } } catch (error: Exception) { lease.close(); throw error }
+    }
     fun hasOwnedContainer(id: String) = file(id).exists()
     fun cleanVerifiedOwned(journal: ArchiveStore) {
         directory.listFiles()?.filter { it.name.matches(Regex("[0-9a-f]{32}\\.cv2")) }?.forEach { owned ->
@@ -146,19 +161,20 @@ internal class AndroidArchiveStaging(private val context: Context, private val s
             if (journal.load(id).phase == ArchivePhase.VERIFIED) runCatching { removeOwnedContainer(id) }
         }
     }
-    override fun removeOwnedContainer(id: String) { val owned = file(id); if (owned.exists()) check(owned.delete()) }
+    override fun removeOwnedContainer(id: String) { check(ViewerRuntime.removeOwned(file(id))) { "Staging container is in use" } }
     private fun stopAware(input: InputStream) = object : FilterInputStream(input) {
         override fun read(): Int { check(!stopped()); return super.read() }
         override fun read(b: ByteArray, off: Int, len: Int): Int { check(!stopped()); return `in`.read(b, off, len) }
     }
 }
 
-internal class YandexArchiveCloud(private val context: Context, private val session: YandexSession) : TilePreparationCloud {
+internal class YandexArchiveCloud(private val context: Context, private val session: YandexSession) : TilePreparationCloud, RangedArchiveCloud {
     private val client = YandexDiskClient { session.token }
+    private val reads = com.cielvitrine.archive.viewer.ViewCancellation()
     override fun requireAccount(uid: String, rootId: String) {
         val current = YandexSessionStore(context).load() ?: error("Sign-in required")
         require(current.uid == uid && current.appRootId == rootId && current.token == session.token)
-        val account = client.connectionInfo(BuildConfig.YANDEX_CLIENT_ID)
+        val account = ViewerRuntime.retrievals.read(reads) { client.connectionInfo(BuildConfig.YANDEX_CLIENT_ID) }
         require(account.uid == uid && account.appRootId == rootId)
     }
     override fun ensureColdFolders() {
@@ -168,7 +184,7 @@ internal class YandexArchiveCloud(private val context: Context, private val sess
         client.ensureDirectory("app:/ciel-vitrine-v2"); client.ensureDirectory("app:/ciel-vitrine-v2/gallery")
     }
     override fun inspect(path: String): ArchiveRemote? {
-        val observation = client.inspect(path)
+        val observation = ViewerRuntime.retrievals.read(reads) { client.inspect(path) }
         if (observation.presence == ProviderObjectPresence.NOT_AT_EXPECTED_PATH) return null
         require(observation.presence == ProviderObjectPresence.PRESENT)
         val resource = observation.resource!!
@@ -176,9 +192,20 @@ internal class YandexArchiveCloud(private val context: Context, private val sess
             resource.modified?.takeIf { it.isNotBlank() } ?: error("No object version"), resource.byteLength ?: error("No object length"), resource.sha256)
     }
     override fun uploadNew(path: String, bytes: Long, open: () -> InputStream) { client.uploadNew(path, bytes, open) }
-    override fun <T> readback(path: String, read: (InputStream) -> T): T = client.fullReadback(path, read)
+    override fun <T> readback(path: String, read: (InputStream) -> T): T = ViewerRuntime.retrievals.read(reads) { client.fullReadback(path, read) }
+    override fun openRange(path: String, offset: Long, expected: ArchiveRemote): ArchiveRangeResult {
+        require(inspect(path) == expected) { "Container revision changed" }
+        val admission = ViewerRuntime.retrievals.acquire(reads)
+        try {
+            val input = client.openRange(path, offset, expected.bytes)
+            val held = object : FilterInputStream(input) {
+                override fun close() { try { super.close() } finally { admission.close() } }
+            }
+            return ArchiveRangeResult(expected, offset, expected.bytes, held)
+        } catch (error: Throwable) { admission.close(); throw error }
+    }
     override fun ensureTileFolders() {
         client.ensureDirectory("app:/ciel-vitrine-v2"); client.ensureDirectory("app:/ciel-vitrine-v2/tiles")
     }
-    fun range(path: String, offset: Long, length: Int, total: Long) = client.rangeReadback(path, offset, length, total)
+    fun range(path: String, offset: Long, length: Int, total: Long) = ViewerRuntime.retrievals.read(reads) { client.rangeReadback(path, offset, length, total) }
 }

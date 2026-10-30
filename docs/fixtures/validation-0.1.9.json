@@ -6,8 +6,9 @@
   "python": {"pos_v1": 4, "cvpos2": 10, "failures": 0},
   "lint": {"errors": 0, "warnings": 41},
   "local_android": {
-    "api": 35, "tests": 51, "passed": 48, "skipped_real_cloud": 3,
-    "failures": 0, "time_seconds": 301.778
+    "api": 35, "tests": 52, "passed": 49, "skipped_real_cloud": 3,
+    "failures": 0, "time_seconds": 210.595,
+    "previous_run_before_queue_fix_seconds": 301.778
   },
   "phone": {
     "api": 36, "model": "Android test device", "tests": 27, "failures": 0,

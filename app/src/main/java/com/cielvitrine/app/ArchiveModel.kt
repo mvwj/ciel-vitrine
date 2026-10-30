@@ -41,13 +41,14 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
                 val rows = store.page(31, cursor)
                 val jobs=rows.take(30).map { it.second }
                 rows.take(30).lastOrNull()?.first to ArchiveUiState(jobs, store.counts(), store.batches(), store.paused(), rows.size > 30,
-                    olderPage = cursor != null,tiles=jobs.filter{it.phase==ArchivePhase.VERIFIED && it.mime.startsWith("image/")}.associate{it.id to TileStore(context).status(it.id)},benchmarkIds=benchmarkIds)
+                    olderPage = cursor != null,tiles=jobs.filter{it.phase==ArchivePhase.VERIFIED && it.mime.startsWith("image/")}.associate{it.id to TileStore(context).status(it.id,it.mime)},benchmarkIds=benchmarkIds)
             }
             if (beforeRow == cursor) { lastRow = updated.first; mutable.value = updated.second.copy(busy = mutable.value.busy, message = mutable.value.message) }
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { mutable.value = mutable.value.copy(message = "Не удалось прочитать журнал. Исходные файлы сохранены.") }
     }
     private suspend fun kick() = withContext(Dispatchers.IO) {
+        store.upgradeSizeOnlyRows()
         if (!store.paused()) {
             store.batches().filter { it.phase == ScanPhase.DISCOVERING }.forEach { ArchiveScanWorker.enqueue(context, it.id) }
             if (store.next() != null) ArchiveWorker.enqueue(context)
@@ -78,11 +79,10 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
             }
         }
         context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val tooLarge = (bytes ?: 0) > ColdArchive.MAX_BYTES
+        val mime = (context.contentResolver.getType(uri) ?: "application/octet-stream").take(256)
         store.save(ArchiveJob(ArchiveStore.randomId(), null, null, uri.toString(), name,
-            (context.contentResolver.getType(uri) ?: "application/octet-stream").take(256), bytes,
-            if (tooLarge) ArchivePhase.UNSUPPORTED_SIZE else ArchivePhase.QUEUED, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
-            notice = if (tooLarge) "Файл учтён. Загрузка свыше 128 МиБ появится с поддержкой частей." else null))
+            mime, bytes, ArchivePhase.QUEUED, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
+            transport = if(bytes == null || bytes > MAX_SINGLE_BYTES || mime.startsWith("video/")) OriginalTransport.MULTIPART else OriginalTransport.SINGLE))
     }
     fun prepareAll() = perform("Собираем все доступные фото и видео. Новые файлы после начала сканирования войдут в следующий запуск.") {
         require(store.batches().none { it.phase == ScanPhase.DISCOVERING })
@@ -100,8 +100,7 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
     fun measure(id:String){measured(setOf(id));mutable.value=mutable.value.copy(benchmarkIds=benchmarkIds)}
     suspend fun openCloud(id: String): MediaItem = withContext(Dispatchers.IO) {
         val job = store.load(id)
-        val file = CloudOriginalReader(context).load(job)
-        job.mediaItem().copy(uri = Uri.fromFile(file), performanceId = job.id)
+        job.mediaItem()
     }
     fun pause(paused: Boolean) = perform(if (paused) "Очередь приостановлена. Исходники и незавершённые контейнеры сохранены." else "Очередь продолжена.") { store.setPaused(paused) }
     fun resumeScan(id: String) = perform("Повторяем сканирование с сохранённой позиции.") {

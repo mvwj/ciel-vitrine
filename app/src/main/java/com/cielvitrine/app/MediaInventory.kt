@@ -17,8 +17,21 @@ import java.io.FilterInputStream
 import android.content.res.AssetFileDescriptor
 
 /** Keep the exact descriptor while honoring the asset's offset/length and close ownership. */
-internal class OriginalInputStream(private val asset: AssetFileDescriptor) : FilterInputStream(asset.createInputStream()) {
-    val sourceDescriptor get() = asset.fileDescriptor
+internal interface OriginalDescriptorOwner { val sourceDescriptor: java.io.FileDescriptor? }
+internal class OriginalInputStream(private val asset: AssetFileDescriptor,
+    private val lease: AutoCloseable? = null) : FilterInputStream(asset.createInputStream()), OriginalDescriptorOwner {
+    override val sourceDescriptor get() = asset.fileDescriptor
+    override fun close() { try { super.close() } finally { lease?.close() } }
+}
+
+internal class LeasedOriginalStream(input: InputStream, private val lease: AutoCloseable):
+    FilterInputStream(input), OriginalDescriptorOwner {
+    override val sourceDescriptor = when(input) {
+        is OriginalDescriptorOwner -> input.sourceDescriptor
+        is java.io.FileInputStream -> input.fd
+        else -> null
+    }
+    override fun close() { try { super.close() } finally { lease.close() } }
 }
 
 /** Inventory is a resumable list of visible resources, never evidence that an absent file was deleted. */
@@ -77,12 +90,11 @@ internal class MediaInventory(private val context: Context) {
                     val source = stamp(c, volume.name, volume.epoch); last = source.mediaId
                     val name = c.getString(c.getColumnIndexOrThrow("_display_name")) ?: "original.bin"
                     val mime = c.getString(c.getColumnIndexOrThrow("mime_type")) ?: "application/octet-stream"
-                    val tooLarge = (source.bytes ?: 0) > ColdArchive.MAX_BYTES
                     add(ArchiveJob(ArchiveStore.randomId(), null, null,
                         ContentUris.withAppendedId(MediaStore.Files.getContentUri(volume.name), source.mediaId).toString(), name.take(1024), mime.take(256),
-                        source.bytes, if (tooLarge) ArchivePhase.UNSUPPORTED_SIZE else ArchivePhase.QUEUED,
+                        source.bytes, ArchivePhase.QUEUED,
                         batchId = batch.id, sourceStamp = source, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
-                        notice = if (tooLarge) "Файл учтён. Для загрузки свыше 128 МиБ ещё нужна поддержка частей." else null))
+                        transport = if(source.bytes == null || (source.bytes ?: 0) > MAX_SINGLE_BYTES || mime.startsWith("video/")) OriginalTransport.MULTIPART else OriginalTransport.SINGLE))
                 }
             }
         } ?: error("Inventory access lost")
@@ -106,18 +118,26 @@ internal class MediaInventory(private val context: Context) {
         } ?: error("Выбранный файл недоступен")
         require(epoch(volume) == version && currentMediaBinding(context, item.uri) == item.binding)
         require(source.generation == item.generation && source.bytes == item.bytes && source.modifiedSeconds == item.modifiedSeconds)
-        val large = item.bytes > ColdArchive.MAX_BYTES
         return ArchiveJob(ArchiveStore.randomId(), null, null, item.uri.toString(), item.name, item.mime, item.bytes,
-            if (large) ArchivePhase.UNSUPPORTED_SIZE else ArchivePhase.QUEUED, sourceStamp = source,
+            ArchivePhase.QUEUED, sourceStamp = source,
             createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
-            notice = if (large) "Файл свыше 128 МиБ учтён; загрузка частями ещё недоступна." else null)
+            transport = if(item.bytes > MAX_SINGLE_BYTES || item.isVideo) OriginalTransport.MULTIPART else OriginalTransport.SINGLE)
     }
     fun openOriginal(job: ArchiveJob): InputStream = openOriginal(Uri.parse(job.source))
     fun openOriginal(source: Uri): InputStream {
+        val lease = ViewerRuntime.source(source.toString())
+        try { return openLeasedOriginal(source, lease) }
+        catch (error: Exception) { lease.close(); throw error }
+    }
+    private fun openLeasedOriginal(source: Uri, lease: AutoCloseable): InputStream {
         var uri = source
         // SAF MediaDocuments may still map to a MediaStore object; generic document providers supply their selected bytes.
         val media = if (uri.authority == MediaStore.AUTHORITY) uri else runCatching { MediaStore.getMediaUri(context, uri) }.getOrNull()
-        if (media == null) return resolver.openInputStream(uri) ?: error("Source unavailable")
+        if (media == null) {
+            val input = resolver.openInputStream(uri) ?: error("Source unavailable")
+            try { return LeasedOriginalStream(input,lease) }
+            catch(error:Exception) { input.close();throw error }
+        }
         uri = MediaStore.setRequireOriginal(media)
         val descriptor = if (Build.VERSION.SDK_INT < 31) resolver.openAssetFileDescriptor(uri, "r")
             else resolver.openTypedAssetFileDescriptor(uri, "*/*", Bundle().apply {
@@ -125,7 +145,7 @@ internal class MediaInventory(private val context: Context) {
             })
         requireNotNull(descriptor) { "Original unavailable" }
         try {
-            return OriginalInputStream(descriptor)
+            return OriginalInputStream(descriptor, lease)
         } catch (e: Exception) { descriptor.close(); throw e }
     }
 }

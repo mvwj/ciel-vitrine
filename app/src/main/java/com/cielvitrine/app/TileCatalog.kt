@@ -102,6 +102,7 @@ internal class TileStore(private val context:Context,private val directory:File=
         val sealed=try{cipher.seal(c.id,plain)}finally{plain.fill(0)};val out=f.startWrite()
         try{out.write(sealed);f.finishWrite(out)}catch(e:Exception){f.failWrite(out);throw e}
     }
-    fun status(id:String):String=runCatching{load(id)?.let{if(it.ready)"Фрагменты готовы" else if(it.deferred)"Подготовка фрагментов приостановлена" else "Готовим фрагменты"} ?: "Фрагменты ещё не подготовлены"}.getOrDefault("Индекс фрагментов недоступен")
+    fun status(id:String,mime:String?=null):String=runCatching{load(id)?.let{if(it.ready)"Фрагменты готовы" else if(it.deferred)"Подготовка фрагментов приостановлена" else "Готовим фрагменты"}
+        ?: mime?.let(MediaCapabilities::notice) ?: "Фрагменты ещё не подготовлены"}.getOrDefault("Индекс фрагментов недоступен")
     companion object{private val guard=Any()}
 }

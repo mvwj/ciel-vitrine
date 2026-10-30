@@ -35,7 +35,8 @@ class TileTransportAndroidTest {
         assumeTrue(Build.VERSION.SDK_INT>=34)
         val base=Bitmap.createBitmap(32,24,Bitmap.Config.RGBA_F16,true,ColorSpace.get(ColorSpace.Named.DISPLAY_P3))
         val canvas=Canvas(base);canvas.drawColor(Color.argb(.65f,.3f,.5f,.8f))
-        val gain=Bitmap.createBitmap(16,12,Bitmap.Config.ARGB_8888).apply{eraseColor(Color.GRAY)}
+        // A valid gainmap can be larger than the base raster and larger than the tile grid.
+        val gain=Bitmap.createBitmap(1024,768,Bitmap.Config.ARGB_8888).apply{eraseColor(Color.GRAY)}
         val map=Gainmap(gain).apply{setRatioMin(1f,1.1f,1.2f);setRatioMax(4f,5f,6f);setGamma(.9f,1f,1.1f)
             setEpsilonSdr(.01f,.02f,.03f);setEpsilonHdr(.04f,.05f,.06f);displayRatioForFullHdr=6f;minDisplayRatioForHdrTransition=1.1f}
         if(Build.VERSION.SDK_INT>=36){map.gainmapDirection=Gainmap.GAINMAP_DIRECTION_HDR_TO_SDR;map.alternativeImagePrimaries=ColorSpace.get(ColorSpace.Named.BT2020)}
@@ -51,7 +52,7 @@ class TileTransportAndroidTest {
     }
     @Test fun coldToTilesReadsOnlyVisibleRangesWarmCacheUsesNoRasterNetworkAndPixelsMatchNativeRegions()=withPrepared { source,job,store,cloud,alias,scope ->
         val c=store.load(job.id)!!;assertTrue(c.ready)
-        val reader=TileReader(context,c,cloud,File(scope,"cache"),alias)
+        TileReader(context,c,cloud,File(scope,"cache"),alias).use { reader ->
         val original=source.readBytes();val rect=Rect(200,200,400,400)
         val visible=reader.visible(rect,1);assertEquals(1,visible.size)
         assertEquals(1,cloud.ranges.size)
@@ -69,23 +70,27 @@ class TileTransportAndroidTest {
         val row=(0 until metrics.length()).map{metrics.getJSONObject(it)}.single{it.getString("id")==job.id}
         assertEquals(2,row.getJSONObject("totals").getJSONObject("tile_download").getInt("success"))
         assertTrue(row.getJSONObject("totals").getJSONObject("tile_cache").getInt("success")>=1)
+        }
     }
     @Test fun corruptedRangesAndChangedRemoteIdentityNeverProduceADisplayedTile()=withPrepared { _,job,store,cloud,alias,scope ->
-        val c=store.load(job.id)!!;val reader=TileReader(context,c,cloud,File(scope,"cache"),alias)
+        val c=store.load(job.id)!!;TileReader(context,c,cloud,File(scope,"cache"),alias).use { reader ->
         cloud.corrupt=true;assertFails{reader.visible(Rect(10,10,100,100),1)}
         cloud.corrupt=false;cloud.version="changed";assertFails{reader.visible(Rect(10,10,100,100),1)}
         cloud.version="v1";assertEquals(1,reader.visible(Rect(10,10,100,100),1).size)
+        }
     }
     @Test @androidx.test.filters.SdkSuppress(minSdkVersion=34)
     fun nativeHdrRegionsKeepGainmapThroughEncryptedPartialTransport()=withPrepared(hdr=true) { source,job,store,cloud,alias,scope ->
         val c=store.load(job.id)!!;assertTrue(c.hdr)
-        val reader=TileReader(context,c,cloud,File(scope,"cache"),alias);val shown=reader.visible(Rect(20,20,200,200),1).single()
+        TileReader(context,c,cloud,File(scope,"cache"),alias).use { reader ->
+        val shown=reader.visible(Rect(20,20,200,200),1).single()
         assertTrue(reader.preview().bitmap.hasGainmap());assertTrue(shown.bitmap.hasGainmap())
         val decoder=BitmapRegionDecoder.newInstance(source.path,false)
         try{val native=decoder.decodeRegion(shown.coordinate.expanded,BitmapFactory.Options().apply{inPreferredConfig=Bitmap.Config.RGBA_F16})!!
             assertArrayEquals(bytes(native),bytes(shown.bitmap));assertArrayEquals(bytes(native.gainmap!!.gainmapContents),bytes(shown.bitmap.gainmap!!.gainmapContents))
             assertArrayEquals(native.gainmap!!.ratioMax,shown.bitmap.gainmap!!.ratioMax,0f);native.recycle()
         }finally{decoder.recycle()}
+        }
     }
     @Test fun committedButUnacknowledgedUploadIsReadBackAndNeverUploadedTwice()=withPrepared(uncertain=true) { source,job,store,cloud,alias,scope ->
         assertTrue(store.load(job.id)!!.ready);assertEquals(1,cloud.uploads)
@@ -93,7 +98,9 @@ class TileTransportAndroidTest {
         val c=store.load(job.id)!!
         assertFails{store.save(c.copy(tiles=c.tiles.dropLast(1)))}
         assertFails{c.requireJob(job.copy(proof=job.proof!!.copy(originalSha256="0".repeat(64))))}
-        assertEquals(1,TileReader(context,c,cloud,File(scope,"cache"),alias).visible(Rect(0,0,100,100),1).size)
+        TileReader(context,c,cloud,File(scope,"cache"),alias).use { reader ->
+            assertEquals(1,reader.visible(Rect(0,0,100,100),1).size)
+        }
     }
     private fun withPrepared(uncertain:Boolean=false,hdr:Boolean=false,block:(File,ArchiveJob,TileStore,FakeCloud,String,File)->Unit) {
         val scope=File(context.cacheDir,"tile-tests-${UUID.randomUUID()}").apply{mkdirs()}

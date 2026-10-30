@@ -37,7 +37,7 @@ internal class DeviceCipher(private val alias: String, private val domain: Strin
         val key = cachedKey ?: (existing() ?: error("Private database key missing")).also { cachedKey = it; mayCreate = false }
         c.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, bytes.copyOfRange(0, 12)))
         c.updateAAD("$domain:$identity".toByteArray())
-        return c.doFinal(bytes.copyOfRange(12, bytes.size))
+        return c.doFinal(bytes, 12, bytes.size - 12)
     }
     @Synchronized fun index(identity: String): String {
         val indexAlias = "$alias.index"

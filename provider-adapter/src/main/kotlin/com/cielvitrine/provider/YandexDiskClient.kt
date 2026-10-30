@@ -21,7 +21,7 @@ class YandexDiskClient internal constructor(
     private val identityApi: HttpUrl = "https://login.yandex.ru/info".toHttpUrl(),
 ) {
     constructor(token: () -> String) : this(token, "https://cloud-api.yandex.net/v1/disk/".toHttpUrl(),
-        OkHttpClient.Builder().followRedirects(false).followSslRedirects(false)
+        OkHttpClient.Builder().retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false)
             .connectTimeout(20, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS).writeTimeout(60, TimeUnit.SECONDS)
             .callTimeout(4, TimeUnit.MINUTES).build())
 
@@ -139,7 +139,7 @@ class YandexDiskClient internal constructor(
     fun <T> fullReadback(path: String, read: (InputStream) -> T): T {
         var link = signedLink("resources/download", path, "GET")
         val visited = mutableSetOf<HttpUrl>()
-        val downloads = http.newBuilder().followRedirects(false).followSslRedirects(false).build()
+        val downloads = http.newBuilder().retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).build()
         var sendAuthorization = true
         repeat(6) {
             check(isYandexTransferUrl(link) && visited.add(link)) { "Untrusted or looping download redirect" }
@@ -163,13 +163,13 @@ class YandexDiskClient internal constructor(
     }
 
     /** Strict partial transfer. A server ignoring Range is rejected before consuming its body. */
-    fun rangeReadback(path: String, start: Long, length: Int, total: Long): ByteArray {
-        require(start >= 0 && length in 1..8_388_636 && start < total && length.toLong() <= total - start)
-        val end = start + length - 1
+    fun openRange(path: String, start: Long, total: Long): InputStream {
+        require(start >= 0 && start < total)
+        val end = total - 1
         var link = signedLink("resources/download", path, "GET")
         val visited = mutableSetOf<HttpUrl>()
         var sendAuthorization = true
-        val downloads = http.newBuilder().followRedirects(false).followSslRedirects(false).build()
+        val downloads = http.newBuilder().retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).build()
         repeat(6) {
             check(isYandexTransferUrl(link) && visited.add(link)) { "Untrusted or looping download redirect" }
             val request = Request.Builder().url(link).get().header("Range", "bytes=$start-$end")
@@ -178,18 +178,67 @@ class YandexDiskClient internal constructor(
                 }.build()
             val call = downloads.newCall(request)
             call.timeout().timeout(75, TimeUnit.SECONDS)
-            call.execute().use { response ->
+            val response = call.execute()
+            try {
+                if (response.code in setOf(301, 302, 303, 307, 308)) {
+                    val next = response.header("Location")?.let(link::resolve) ?: error("Missing download redirect")
+                    check(isYandexTransferUrl(next)) { "Untrusted download redirect" }
+                    if (next.host != link.host) sendAuthorization = false
+                    link = next
+                    call.cancel(); response.close()
+                } else {
+                    val body = checkedRangeBody(response, start, end, total)
+                    return object : java.io.FilterInputStream(body.byteStream()) {
+                        private var remaining = total - start
+                        override fun read(): Int {
+                            val byte = ByteArray(1)
+                            return if (read(byte, 0, 1) < 0) -1 else byte[0].toInt() and 255
+                        }
+                        override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                            require(offset >= 0 && length >= 0 && offset <= bytes.size - length)
+                            if (length == 0) return 0
+                            val n = `in`.read(bytes, offset, minOf(length.toLong(), remaining + 1).toInt())
+                            if (n < 0 && remaining != 0L) throw IOException("Truncated range")
+                            check(n < 0 || n > 0 && n <= remaining) { "Oversized or empty range read" }
+                            if (n > 0) remaining -= n
+                            return n
+                        }
+                        override fun close() {
+                            // Abort before close, so an invalid/abandoned response is never drained
+                            // just to make its connection reusable. The caller owns this response.
+                            call.cancel(); response.close()
+                        }
+                    }
+                }
+            } catch (error: Throwable) {
+                call.cancel(); response.close(); throw error
+            }
+        }
+        error("Too many download redirects")
+    }
+
+    /** Bounded tile read. Retry uses fresh private arrays; multipart progress uses openRange. */
+    fun rangeReadback(path: String, start: Long, length: Int, total: Long): ByteArray {
+        require(start >= 0 && length in 1..8_388_636 && start < total && length.toLong() <= total - start)
+        val end = start + length - 1
+        var link = signedLink("resources/download", path, "GET")
+        val visited = mutableSetOf<HttpUrl>()
+        var sendAuthorization = true
+        val downloads = http.newBuilder().retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).build()
+        repeat(6) {
+            check(isYandexTransferUrl(link) && visited.add(link)) { "Untrusted or looping download redirect" }
+            val request = Request.Builder().url(link).get().header("Range", "bytes=$start-$end")
+                .header("Accept-Encoding", "identity").apply {
+                    if (sendAuthorization) header("Authorization", authorization())
+                }.build()
+            readRange(request, downloads) { response ->
                 if (response.code in setOf(301, 302, 303, 307, 308)) {
                     val next = response.header("Location")?.let(link::resolve) ?: error("Missing download redirect")
                     check(isYandexTransferUrl(next)) { "Untrusted download redirect" }
                     if (next.host != link.host) sendAuthorization = false
                     link = next
                 } else {
-                    check(response.code == 206) { "Partial download unavailable (HTTP ${response.code})" }
-                    check(response.header("Content-Range") == "bytes $start-$end/$total") { "Incorrect range response" }
-                    check(response.header("Content-Encoding").let { it == null || it == "identity" })
-                    val body = response.body ?: error("Missing range body")
-                    check(body.contentLength() == -1L || body.contentLength() == length.toLong())
+                    val body = checkedRangeBody(response, start, end, total)
                     return body.byteStream().use { input ->
                         val bytes = ByteArray(length); var done = 0
                         while (done < length) {
@@ -202,6 +251,16 @@ class YandexDiskClient internal constructor(
             }
         }
         error("Too many download redirects")
+    }
+
+    private fun checkedRangeBody(response: Response, start: Long, end: Long, total: Long): okhttp3.ResponseBody {
+        if (response.code == 429 || response.code in 500..599) throw IOException("Transient range response")
+        check(response.code == 206) { "Partial download unavailable (HTTP ${response.code})" }
+        check(response.header("Content-Range") == "bytes $start-$end/$total") { "Incorrect range response" }
+        check(response.header("Content-Encoding").let { it == null || it == "identity" })
+        val body = response.body ?: error("Missing range body")
+        check(body.contentLength() == -1L || body.contentLength() == end - start + 1) { "Incorrect range length" }
+        return body
     }
 
     private fun signedLink(endpoint: String, path: String, method: String, extras: Map<String, String> = emptyMap()): HttpUrl {
@@ -219,17 +278,41 @@ class YandexDiskClient internal constructor(
      * or a download callback that may already have written plaintext to its destination. */
     private inline fun <T> readMetadata(request: Request, read: (Response) -> T): T {
         require(request.method == "GET")
-        repeat(2) { attempt ->
+        repeat(3) { attempt ->
             try {
                 val call = http.newCall(request)
                 call.timeout().timeout(75, TimeUnit.SECONDS)
-                return call.execute().use(read)
+                return call.execute().use { response ->
+                    if (attempt < 2 && (response.code == 429 || response.code in 500..599)) throw IOException("Transient metadata response")
+                    read(response)
+                }
             } catch (e: IOException) {
-                if (attempt == 1) throw e
-                http.connectionPool.evictAll()
+                if (attempt == 2 || e is java.io.InterruptedIOException && Thread.currentThread().isInterrupted) throw e
+                try { Thread.sleep(100L shl attempt) }
+                catch (_: InterruptedException) { Thread.currentThread().interrupt(); throw java.io.InterruptedIOException("Metadata read cancelled") }
             }
         }
         error("Metadata retry exhausted")
+    }
+
+    /** Range destinations are private arrays, created afresh for each attempt. A PUT or a full
+     * readback callback can have side effects and is deliberately excluded from this retry path. */
+    private inline fun <T> readRange(request: Request, client: OkHttpClient, read: (Response) -> T): T {
+        repeat(3) { attempt ->
+            try {
+                val call = client.newCall(request)
+                call.timeout().timeout(75, TimeUnit.SECONDS)
+                return call.execute().use { response ->
+                    if (response.code == 429 || response.code in 500..599) throw IOException("Transient range response")
+                    read(response)
+                }
+            } catch (error: IOException) {
+                if (attempt == 2 || Thread.currentThread().isInterrupted) throw error
+                try { Thread.sleep(100L shl attempt) }
+                catch (_: InterruptedException) { Thread.currentThread().interrupt(); throw java.io.InterruptedIOException("Range cancelled") }
+            }
+        }
+        error("Range retry exhausted")
     }
 
     private fun authorization(): String {

@@ -1,0 +1,149 @@
+{
+  "release": "0.1.10",
+  "version_code": 11,
+  "date": "2026-10-30",
+  "integration": {
+    "candidate": "R5-A",
+    "candidate_files": 49,
+    "alternative_merged": false,
+    "archive_sha256": "d0d73fdeb888afd8750358d877eb7eacae82701b553438f436cfd962bba9afc4",
+    "normalized_source_sha256": "c62d96db9a8d661d456dacb265f8ffc4237dec91ff78f5a470418a7b8c5f7d72"
+  },
+  "build": {
+    "result": "SUCCESS",
+    "duration_seconds": 79,
+    "lint_errors": 0,
+    "lint_warnings": 53
+  },
+  "jvm": {
+    "tests": 162,
+    "passed": 159,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 3,
+    "modules": [
+      {
+        "module": "app",
+        "tests": 17,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skips": []
+      },
+      {
+        "module": "archive-engine",
+        "tests": 68,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 3,
+        "skips": [
+          {
+            "test": "cacheLinkCannotMutateAnOutsideFile()",
+            "reason": "org.opentest4j.TestAbortedException: Assumption failed: Symlink creation unavailable: Клиент не обладает требуемыми правами"
+          },
+          {
+            "test": "readonlyPayloadCanBeDamagedWithoutChangingItsPermissions()",
+            "reason": "org.opentest4j.TestAbortedException: Assumption failed: POSIX permissions unavailable on this filesystem"
+          },
+          {
+            "test": "R09D_realDiskFullDoesNotPublishAndRetryRecovers()",
+            "reason": "org.opentest4j.TestAbortedException: Assumption failed: trusted bounded fault filesystem missing; real ENOSPC test not executed"
+          }
+        ]
+      },
+      {
+        "module": "core-crypto",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skips": []
+      },
+      {
+        "module": "core-model",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skips": []
+      },
+      {
+        "module": "pos-format",
+        "tests": 20,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skips": []
+      },
+      {
+        "module": "pos-reference-decoder",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skips": []
+      },
+      {
+        "module": "provider-adapter",
+        "tests": 21,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skips": []
+      },
+      {
+        "module": "reader-share",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skips": []
+      },
+      {
+        "module": "saga-engine",
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skips": []
+      },
+      {
+        "module": "state-machine-tests",
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skips": []
+      }
+    ]
+  },
+  "independent_python": {
+    "pos_v1": 4,
+    "cvpos2_3": 10,
+    "failures": 0,
+    "multipart_129_mib_roundtrip": "passed inside MultipartArchiveTest; not an additional JVM method"
+  },
+  "android": {
+    "api": 35,
+    "avd": "Ciel_Vitrine_Test",
+    "tests": 61,
+    "passed": 58,
+    "failures": 0,
+    "skipped_real_cloud": 3,
+    "duration_seconds": 83.75,
+    "native_multipart_playback": "passed: open, seek, end, only needed parts, immutable original",
+    "cache_root_child_symlink": "passed",
+    "gainmap_transport": "passed"
+  },
+  "apk": {
+    "file": "ciel-vitrine-0.1.10-debug.apk",
+    "bytes": 77568913,
+    "sha256": "0e3a96ae3be3f0062a9a4633885723afd23be6ce4653b308be1fd82874848494",
+    "certificate_sha256": "[LOCAL_SIGNING_CERTIFICATE_REMOVED]",
+    "installed_on_personal_phone": false
+  },
+  "personal_originals_deleted": 0,
+  "real_yandex_multipart_benchmark_completed": false,
+  "physical_hdr_display_confirmed": false,
+  "automatic_live_photo_completeness_confirmed": false
+}

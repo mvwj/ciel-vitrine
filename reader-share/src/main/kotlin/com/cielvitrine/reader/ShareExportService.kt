@@ -69,7 +69,11 @@ object ShareExportService {
         reader: ExactOriginalReader,
         destinationFile: File
     ): ExportResult {
-        destinationFile.outputStream().use { out ->
+        // CREATE_NEW rejects existing files, symlinks and hardlinks atomically.
+        // Opening a destination must never truncate the original before reading it.
+        java.nio.file.Files.newOutputStream(destinationFile.toPath(),
+            java.nio.file.StandardOpenOption.CREATE_NEW,
+            java.nio.file.StandardOpenOption.WRITE).use { out ->
             exportToStream(reader, out)
         }
 
