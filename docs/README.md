@@ -13,6 +13,7 @@ original scope and are not statements about the current version.
 - [Upload badges, cold archive and local removal](CLOUD_STATUS_AND_LOCAL_RELEASE_RU.md)
 - [Contributing and test precautions](../CONTRIBUTING.md)
 - [Security model and private reports](../SECURITY.md)
+- [Public source preparation](PUBLICATION.md)
 
 ## Formats and viewing
 

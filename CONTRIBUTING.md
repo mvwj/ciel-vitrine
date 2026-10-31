@@ -3,6 +3,8 @@
 Small, reproducible changes are welcome. Describe the trigger, resulting
 behavior and validation in each pull request. English and Russian reports are
 both welcome. Contributions are accepted under [Apache-2.0](LICENSE).
+Use your GitHub-provided `noreply` email in commit metadata to avoid publishing
+a personal address. The history privacy check enforces this convention.
 
 ## Local setup
 
