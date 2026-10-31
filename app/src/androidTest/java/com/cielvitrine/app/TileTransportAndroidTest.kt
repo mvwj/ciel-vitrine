@@ -72,6 +72,19 @@ class TileTransportAndroidTest {
         assertTrue(row.getJSONObject("totals").getJSONObject("tile_cache").getInt("success")>=1)
         }
     }
+    @Test fun adjacentRequestedTilesShareOneExactRangeAndCorruptionIsRejectedBeforeDisplay()=withPrepared { _,job,store,cloud,alias,scope ->
+        val catalog=store.load(job.id)!!
+        val entries=catalog.tiles.filter{it.coordinate.sample==1}.sortedBy{it.offset}.take(2)
+        assertEquals(2,entries.size);assertEquals(entries[0].pack,entries[1].pack)
+        assertEquals(entries[0].offset+entries[0].length,entries[1].offset)
+        TileReader(context,catalog,cloud,File(scope,"cache"),alias).use { reader ->
+            cloud.corrupt=true;assertFails{reader.load(entries)}
+            cloud.corrupt=false;cloud.ranges.clear()
+            reader.load(entries).forEach{it.close()}
+            assertEquals(listOf(entries.first().offset to entries.sumOf{it.length}),cloud.ranges)
+            reader.load(entries).forEach{it.close()};assertEquals(1,cloud.ranges.size)
+        }
+    }
     @Test fun corruptedRangesAndChangedRemoteIdentityNeverProduceADisplayedTile()=withPrepared { _,job,store,cloud,alias,scope ->
         val c=store.load(job.id)!!;TileReader(context,c,cloud,File(scope,"cache"),alias).use { reader ->
         cloud.corrupt=true;assertFails{reader.visible(Rect(10,10,100,100),1)}

@@ -138,11 +138,11 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
         val file=android.util.AtomicFile(java.io.File(context.filesDir,"queue-check-summary.json"));val out=file.startWrite()
         try{out.write(result.toString(2).toByteArray());file.finishWrite(out)}catch(e:Exception){file.failWrite(out);throw e}
     }
-    private suspend fun kick() = withContext(Dispatchers.IO) {
+    private suspend fun kick(userInitiated:Boolean=false) = withContext(Dispatchers.IO) {
         store.upgradeSizeOnlyRows()
         if (!store.paused()) {
             store.batches().filter { it.phase == ScanPhase.DISCOVERING }.forEach { ArchiveScanWorker.enqueue(context, it.id) }
-            if (store.next() != null) ArchiveWorker.enqueue(context)
+            if (store.next() != null) ArchiveWorker.enqueue(context,userInitiated)
             ProtectionWorker.enqueue(context)
         }
     }
@@ -156,7 +156,7 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
         if (mutable.value.busy) return
         mutable.value = mutable.value.copy(busy = true, message = null)
         viewModelScope.launch { operations.withLock {
-            try { withContext(Dispatchers.IO) { action() }; mutable.value = mutable.value.copy(message = message); kick(); refresh() }
+            try { withContext(Dispatchers.IO) { action() }; mutable.value = mutable.value.copy(message = message); kick(true); refresh() }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.value = mutable.value.copy(message = "Действие не завершено. Проверьте доступ к файлам и состояние очереди. Исходники сохранены.") }
             finally { mutable.value = mutable.value.copy(busy = false) }

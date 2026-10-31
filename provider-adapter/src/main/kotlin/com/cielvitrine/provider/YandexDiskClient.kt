@@ -145,7 +145,7 @@ class YandexDiskClient internal constructor(
             override fun responseHeadersStart(call:okhttp3.Call){phase="response_headers"}
         }
         var success=false
-        try {http.newBuilder().eventListener(listener).build().newCall(Request.Builder().url(link).put(body).build()).execute().use { response ->
+        try {http.newBuilder().readTimeout(180,TimeUnit.SECONDS).eventListener(listener).build().newCall(Request.Builder().url(link).put(body).build()).execute().use { response ->
             code=response.code;success=code==201 || code==202
             val timing=UploadTimings(linkNanos,System.nanoTime()-requestStarted,bodyNanos,bodyBytes,phase,code)
             return when (response.code) {

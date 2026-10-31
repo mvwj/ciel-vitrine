@@ -96,6 +96,36 @@ class OwnedCloudBenchmarkAndroidTest {
         }
         ArchiveWorker.enqueue(context);ProtectionWorker.enqueue(context)
     }
+    private fun newVideoAttempt() {
+        val s=state();val oldId=s.getString("video")
+        val attempts=s.optJSONArray("previous_video_attempts") ?: JSONArray();require(attempts.length()<3)
+        ArchiveStore(context).use { store ->
+            val old=store.load(oldId)
+            require(old.name=="ciel-benchmark-4k-1GB.mp4" && old.zone==OriginalZone.COLD && old.deferred && old.phase==ArchivePhase.QUEUED)
+            require(AndroidMultipartStore(context,old).state()?.nextPart==0L)
+            val item=library().single{it.uri.toString()==old.source && it.name==old.name && it.folder=="CielVitrineTests"}
+            val next=MediaInventory(context).selected(item);store.save(next)
+            store.saveProtection(ProtectionPlan(next.id,requireNotNull(item.binding),SaveMode.KEEP_LOCAL,true,setId=ArchiveStore.randomId(),displayName=next.name))
+            attempts.put(oldId);s.put("previous_video_attempts",attempts).put("video",next.id);save(s);selectMeasurements(s)
+        }
+        ArchiveWorker.enqueue(context);ProtectionWorker.enqueue(context)
+    }
+    private fun probeVideo() {
+        val s=state();val result=JSONObject().put("phase","probe_video")
+        ArchiveStore(context).use { store ->
+            val job=store.load(s.getString("video"));require(job.name=="ciel-benchmark-4k-1GB.mp4")
+            val journal=AndroidMultipartStore(context,job);val state=journal.state()
+            val intent=if(state!=null && state.nextPart<state.passport.parts)journal.part(state.nextPart).intent else null
+            if(intent?.attempted==true) {
+                val cloud=YandexArchiveCloud(context,YandexSessionStore(context).load()!!)
+                val remote=cloud.inspect("app:/ciel-vitrine-v2/cold/${intent.id}.bin")
+                result.put("attempted_part_observed",remote!=null).put("observed_part_bytes",remote?.bytes ?: -1)
+                if(remote!=null)result.put("expected_part_size_matches",remote.bytes==intent.proof.containerBytes)
+            }
+            if(job.deferred)store.resume(job.id)
+        }
+        report(result);ArchiveWorker.enqueue(context,true);ProtectionWorker.enqueue(context)
+    }
     private fun report(extra:JSONObject=JSONObject()) {
         val s=state();val rows=JSONArray();val ids=mutableSetOf<String>()
         ArchiveStore(context).use { store ->
@@ -141,9 +171,9 @@ class OwnedCloudBenchmarkAndroidTest {
                     val hash=ProtectedThumbnail(context).save(cold,local,context)
                     store.saveProtection(p.copy(mode=SaveMode.FREE_LOCAL,declaredComplete=true,stage=ProtectionStage.READY,
                         previewSha=hash,setId=ArchiveStore.randomId(),checkedAt=null,notice=null))
-                    // Exercise the real release gate, then cancel its prompt. The test owns this
-                    // exact row and can remove it directly; no user row is passed to delete().
-                    LocalRelease(context).prepare(listOf(id)).cancel()
+                    // Exercise the real release gate without launching its prompt. This harness
+                    // owns this exact row and may remove it; no user row is passed to delete().
+                    LocalRelease(context).prepare(listOf(id))
                     require(android.content.ContentUris.parseId(uri)==cold.sourceStamp!!.mediaId)
                     assertEquals(1,context.contentResolver.delete(uri,null,null))
                     LocalRelease(context).result(listOf(id),true)
@@ -191,6 +221,8 @@ class OwnedCloudBenchmarkAndroidTest {
             "queue_video"->{queueVideo();report()}
             "retry_photo"->{retryPhoto();report()}
             "new_photo_attempt"->{newPhotoAttempt();report()}
+            "new_video_attempt"->{newVideoAttempt();report()}
+            "probe_video"->probeVideo()
             "photo_view"->photoView()
             "status"->report()
             else->error("Unknown owned benchmark phase")

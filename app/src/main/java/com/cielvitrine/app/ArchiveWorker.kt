@@ -78,10 +78,21 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
         }
     }
     companion object {
-        fun enqueue(context: Context) {
-            QueueScheduling.append(context, "archive-upload-queue", OneTimeWorkRequestBuilder<ArchiveWorker>()
+        fun enqueue(context: Context,userInitiated:Boolean=false) {
+            fun request(id:java.util.UUID?=null):OneTimeWorkRequest {
+                val builder=OneTimeWorkRequestBuilder<ArchiveWorker>()
                 .addTag("cold-archive").setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
-                .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
+                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS)
+                if(userInitiated)builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+                if(id!=null)builder.setId(id)
+                return builder.build()
+            }
+            if(userInitiated) {
+                val manager=WorkManager.getInstance(context)
+                val head=manager.getWorkInfosForUniqueWork("archive-upload-queue").get().firstOrNull{it.state==WorkInfo.State.ENQUEUED}
+                if(head!=null && manager.updateWork(request(head.id)).get()!=WorkManager.UpdateResult.NOT_APPLIED)return
+            }
+            QueueScheduling.append(context,"archive-upload-queue",request())
         }
     }
 }
@@ -192,7 +203,7 @@ internal class YandexArchiveCloud(private val context: Context, private val sess
     private val client = YandexDiskClient { session.token }
     private val reads = com.cielvitrine.archive.viewer.ViewCancellation()
     private var checkedUntil=0L
-    override fun requireAccount(uid: String, rootId: String) {
+    @Synchronized override fun requireAccount(uid: String, rootId: String) {
         val current = YandexSessionStore(context).load() ?: error("Sign-in required")
         require(current.uid == uid && current.appRootId == rootId && current.token == session.token)
         val now=android.os.SystemClock.elapsedRealtime()
@@ -201,7 +212,7 @@ internal class YandexArchiveCloud(private val context: Context, private val sess
         require(account.uid == uid && account.appRootId == rootId)
         checkedUntil=android.os.SystemClock.elapsedRealtime()+30_000
     }
-    fun requireFreshAccount(uid:String,rootId:String){checkedUntil=0;requireAccount(uid,rootId)}
+    @Synchronized fun requireFreshAccount(uid:String,rootId:String){checkedUntil=0;requireAccount(uid,rootId)}
     override fun ensureColdFolders() {
         client.ensureDirectory("app:/ciel-vitrine-v2"); client.ensureDirectory("app:/ciel-vitrine-v2/cold")
     }
@@ -217,6 +228,7 @@ internal class YandexArchiveCloud(private val context: Context, private val sess
             resource.modified?.takeIf { it.isNotBlank() } ?: error("No object version"), resource.byteLength ?: error("No object length"), resource.sha256)
     }
     override fun uploadNew(path: String, bytes: Long, open: () -> InputStream) {
+        try {
         client.uploadNew(path,bytes,observe={timing,ok->
             timingId?.invoke()?.let{id->
                 val metrics=PerformanceJournal(context)
@@ -237,6 +249,12 @@ internal class YandexArchiveCloud(private val context: Context, private val sess
             override fun read(b:ByteArray,off:Int,len:Int):Int {val n=`in`.read(b,off,len);if(n>0)report(n);return n}
             private fun report(n:Int){sent+=n;val now=System.nanoTime();if(now-last>=250_000_000L || sent==bytes){progress?.invoke("upload",sent,bytes);last=now}}
         }}
+        }catch(error:IOException) {
+            // A lost HTTP reply may still have committed the object. Observation only permits
+            // the caller's next full readback; it does not grant VERIFIED and never repeats PUT.
+            val observed=runCatching{inspect(path)}.getOrNull()
+            if(observed==null || observed.bytes!=bytes)throw error
+        }
     }
     override fun <T> readback(path: String, read: (InputStream) -> T): T = ViewerRuntime.retrievals.read(reads) { client.fullReadback(path, read) }
     override fun openRange(path: String, offset: Long, expected: ArchiveRemote): ArchiveRangeResult {
