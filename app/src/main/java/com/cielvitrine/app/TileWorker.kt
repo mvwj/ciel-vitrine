@@ -31,14 +31,19 @@ class TileWorker(context:Context,params:WorkerParameters):Worker(context,params)
                         if(old?.ready==true || old?.deferred==true)return Result.success()
                         val session=YandexSessionStore(context).load() ?: return Result.success()
                         require(session.uid==job.uid && session.appRootId==job.rootId)
-                        val cloud=YandexArchiveCloud(context,session);cloud.requireAccount(job.uid!!,job.rootId!!);cloud.ensureTileFolders()
+                        val cloud=YandexArchiveCloud(context,session,timingId={id},timingPrefix="tile_");cloud.requireAccount(job.uid!!,job.rootId!!);cloud.ensureTileFolders()
                         val producer=TileProducer(context,catalogs,directory,{isStopped || journal.paused()})
                         producer.prepare(job,cloud)
                         ProtectionWorker.enqueue(context)
                         Result.success()
                     } catch(error:Exception) {
                         recordTileFailure(context,id,error)
-                        if(!isStopped && !journal.paused())runCatching{catalogs.load(id)?.let{catalogs.save(it.copy(deferred=true))}}
+                        if(!isStopped && !journal.paused())runCatching{
+                            catalogs.load(id)?.let{catalogs.save(it.copy(deferred=true))}
+                            journal.protections().filter{it.workingId==id && it.stage==ProtectionStage.PREVIEW}.forEach{plan->
+                                journal.saveProtection(plan.copy(stage=ProtectionStage.ERROR,notice="Подготовка просмотра остановилась. Обе копии сохранены, исходник остаётся на телефоне. Нажмите «Повторить»."))
+                            }
+                        }
                         ProtectionWorker.enqueue(context)
                         // Uncertain pack attempts remain persisted and can only be read back on resume.
                         Result.success()
@@ -48,12 +53,20 @@ class TileWorker(context:Context,params:WorkerParameters):Worker(context,params)
         }
     }
     companion object {
+        private val enqueueGuard=Any()
         fun enqueue(context:Context,id:String) {
             require(id.matches(TileCatalog.ID))
-            WorkManager.getInstance(context).enqueueUniqueWork("tiles-$id",ExistingWorkPolicy.KEEP,
-                OneTimeWorkRequestBuilder<TileWorker>().setInputData(workDataOf("id" to id)).addTag("gallery-tiles")
-                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
-                    .setBackoffCriteria(BackoffPolicy.EXPONENTIAL,30,TimeUnit.SECONDS).build())
+            synchronized(enqueueGuard) {
+                val manager=WorkManager.getInstance(context);val tag="tile-job:$id"
+                if(manager.getWorkInfosByTag(tag).get().any{!it.state.isFinished})return
+                // Older versions let several workers compete for one staging lock. Retire the
+                // old request, preserving its journal, and append to one serial pipeline.
+                manager.cancelUniqueWork("tiles-$id").result.get()
+                manager.enqueueUniqueWork("gallery-tile-pipeline",ExistingWorkPolicy.APPEND_OR_REPLACE,
+                    OneTimeWorkRequestBuilder<TileWorker>().setInputData(workDataOf("id" to id)).addTag("gallery-tiles").addTag(tag)
+                        .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
+                        .setBackoffCriteria(BackoffPolicy.LINEAR,10,TimeUnit.SECONDS).build()).result.get()
+            }
         }
     }
 }

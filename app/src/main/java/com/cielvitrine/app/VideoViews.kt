@@ -191,7 +191,7 @@ class VideoViewWorker(context:Context,params:WorkerParameters):CoroutineWorker(c
             ViewerRuntime.source(Uri.fromFile(output).toString()).use {
                 val saved=YandexSessionStore(context).load() ?: error("Sign-in required")
                 require(saved.uid==original.uid && saved.appRootId==original.rootId)
-                val cloud=YandexArchiveCloud(context,saved);val jobs=store.journal(quality,expected)
+                val cloud=YandexArchiveCloud(context,saved,timingId={original.id},timingPrefix="rendition_");val jobs=store.journal(quality,expected)
                 val deadline=System.nanoTime()+180_000_000_000L
                 while(!stopping() && System.nanoTime()<deadline) {
                     val job=jobs.load(request.job.id)

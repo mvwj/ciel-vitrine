@@ -41,6 +41,9 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         }
     }.apply { check(directory.isDirectory || directory.mkdirs()); setWriteAheadLoggingEnabled(true) }
     private val db get() = helper.writableDatabase
+    private var sourceIndexReady=false
+    private val sourceLookupCache=java.util.concurrent.ConcurrentHashMap<String,String>()
+    private fun sourceLookup(source:String)=sourceLookupCache.computeIfAbsent(source){"v2:${cipher.fastIndex("source:$it")}"}
 
     private fun <T> transaction(block: () -> T): T = synchronized(guard) {
         db.beginTransaction()
@@ -85,7 +88,7 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
             put("id", next.id); put("revision", next.revision); put("phase", next.phase.name); put("deferred", if (next.deferred) 1 else 0)
             put("zone", next.zone.name); put("batch_id", next.batchId); put("payload", payload)
             if (sourceKey != null) put("source_key", sourceKey)
-            put("source_lookup",cipher.index("source:${job.source}"))
+            put("source_lookup",sourceLookup(job.source))
         }
         if (exists == null) db.insertOrThrow("jobs", null, values)
         else check(db.update("jobs", values, "id=? AND revision=?", arrayOf(job.id, job.revision.toString())) == 1)
@@ -107,13 +110,26 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
     }
     /** Backfill old rows without replacing payloads, revisions or deduplication keys. */
     fun indexSources() = transaction {
-        val ids=db.rawQuery("SELECT id FROM jobs WHERE source_lookup IS NULL",null).use{c->buildList{while(c.moveToNext())add(c.getString(0))}}
-        ids.forEach{id->val job=load(id);db.execSQL("UPDATE jobs SET source_lookup=? WHERE id=?",arrayOf(cipher.index("source:${job.source}"),id))}
+        val ids=db.rawQuery("SELECT id FROM jobs WHERE source_lookup IS NULL OR source_lookup NOT LIKE 'v2:%'",null).use{c->buildList{while(c.moveToNext())add(c.getString(0))}}
+        ids.forEach{id->val job=load(id);db.execSQL("UPDATE jobs SET source_lookup=? WHERE id=?",arrayOf(sourceLookup(job.source),id))}
+        sourceIndexReady=true
     }
-    fun forSources(sources:List<String>):List<ArchiveJob> = synchronized(guard) {
-        sources.distinct().chunked(200).flatMap { chunk ->
-            if(chunk.isEmpty())emptyList() else db.rawQuery("SELECT id FROM jobs WHERE source_lookup IN (${chunk.joinToString(","){"?"}})",
-                chunk.map{cipher.index("source:$it")}.toTypedArray()).use{c->buildList{while(c.moveToNext())add(load(c.getString(0)))}}
+    fun forSources(sources:List<String>,checkCancelled:()->Unit={}):List<ArchiveJob> {
+        val stored=synchronized(guard){
+            if(!sourceIndexReady)indexSources()
+            db.rawQuery("SELECT DISTINCT source_lookup FROM jobs WHERE source_lookup IS NOT NULL",null)
+                .use{c->buildSet{while(c.moveToNext())add(c.getString(0))}}
+        }
+        if(stored.isEmpty())return emptyList()
+        return sources.distinct().chunked(200).flatMap { chunk ->
+            checkCancelled()
+            val keys=chunk.map{checkCancelled();sourceLookup(it)}.filter{it in stored}.toTypedArray()
+            if(keys.isEmpty())return@flatMap emptyList()
+            synchronized(guard) {
+                checkCancelled()
+                db.rawQuery("SELECT id FROM jobs WHERE source_lookup IN (${keys.joinToString(","){"?"}})",keys)
+                    .use{c->buildList{while(c.moveToNext()){checkCancelled();add(load(c.getString(0)))}}}
+            }
         }
     }
     fun protection(id:String):ProtectionPlan? = synchronized(guard) {

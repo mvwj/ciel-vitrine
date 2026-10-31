@@ -90,8 +90,12 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     val yandex by cloudModel.state.collectAsStateWithLifecycle()
     val archive by archiveModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val authSdk = remember { YandexAuthSdk.create(YandexAuthOptions(context)) }
-    val yandexLogin = rememberLauncherForActivityResult(authSdk.contract) { result ->
+    val authSdk = remember { if(BuildConfig.YANDEX_CLIENT_ID.isBlank())null else YandexAuthSdk.create(YandexAuthOptions(context)) }
+    val authContract=remember(authSdk){authSdk?.contract ?: object:androidx.activity.result.contract.ActivityResultContract<YandexAuthLoginOptions,com.yandex.authsdk.YandexAuthResult>() {
+        override fun createIntent(context:android.content.Context,input:YandexAuthLoginOptions):android.content.Intent=error("OAuth is not configured")
+        override fun parseResult(resultCode:Int,intent:android.content.Intent?):com.yandex.authsdk.YandexAuthResult=error("OAuth is not configured")
+    }}
+    val yandexLogin = rememberLauncherForActivityResult(authContract) { result ->
         YandexAuthResultBridge.deliver(result, cloudModel)
     }
     fun signInYandex() {
@@ -128,7 +132,10 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     val originalPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (pendingAll) { pendingAll = false; if(granted)archiveModel.prepareAll() else model.message("Для архива оригинала нужен доступ к исходным метаданным") }
         if (pendingSelected) { pendingSelected=false
-            if(granted && selectionItems.size==selection.size && selectionLocalItems.isNotEmpty())archiveModel.protectSelected(selectionLocalItems,saveMode,completeSet)
+            if(granted && selectionItems.size==selection.size && selectionLocalItems.isNotEmpty()) {
+                archiveModel.protectSelected(selectionLocalItems,saveMode,completeSet)
+                destination=Destination.CLOUD
+            }
             else model.message("Не все выбранные оригиналы доступны с исходными метаданными. Выбор сохранён.")
         }
     }
@@ -243,6 +250,10 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                 }
             }
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent)
+            if(archive.busy && !archive.checkingRelease)Column(Modifier.fillMaxWidth().padding(horizontal=16.dp,vertical=8.dp)) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text("Сохраняем выбор и готовим очередь…",style=MaterialTheme.typography.bodySmall)
+            }
             if(archive.checkingRelease)Column(Modifier.fillMaxWidth().padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text("Проверяем обе облачные копии перед освобождением места. Оригиналы пока на телефоне.",style=MaterialTheme.typography.bodySmall)
@@ -272,7 +283,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                     }
                     if (filtered.isEmpty() && state.access != MediaAccess.NONE && !state.loading) EmptyState("Здесь будут ваши снимки", "Добавьте фото на телефон или измените выбранный доступ.", Icons.Outlined.Photo)
                     else MediaTimeline(filtered, Modifier.weight(1f),open={if(selectionMode)selectItem(it)else selected=it},select={selectItem(it)},selected=selection.toSet(),
-                        cloudStatuses=archive.mediaStatus,cloudDetails={_,status->cloudDetail=status})
+                        cloudStatuses=archive.mediaStatus,cloudDetails={_,status->cloudDetail=status},selecting=selectionMode)
                 }
                 Destination.ALBUMS -> LazyColumn(contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     item { CollectionCard("Избранное", collectionSummary(state.favorites, library), library.firstOrNull { state.favorites.containsMedia(it) }, Icons.Outlined.FavoriteBorder) { favoriteFilter = true; destination = Destination.PHOTOS } }
@@ -286,6 +297,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                 }
                 Destination.CLOUD -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     item { CloudActivityCard(archive,yandex){} }
+                    item { SelectedTransfersCard(archive) }
                     if (state.cloud?.provider != "Google Drive" || yandex.account != null) item {
                         YandexAccountCard(yandex, { signInYandex() }, { cloudModel.recheck() }, { cloudModel.disconnect() })
                     } else item { InfoCard("Google Drive", "Подключение Google Drive появится позже. Сейчас доступен вход через Яндекс Диск.", Icons.Outlined.CloudQueue, "Выбрать Яндекс Диск", { model.chooseCloud("Яндекс Диск") }) }
@@ -355,7 +367,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                     } }
                     if (archive.hasMore) item { TextButton(onClick = { archiveModel.more() }, modifier = Modifier.padding(horizontal = 24.dp)) { Text("Следующие записи очереди") } }
                     if (archive.olderPage) item { TextButton(onClick = { archiveModel.first() }, modifier = Modifier.padding(horizontal = 24.dp)) { Text("К новым записям") } }
-                    item { PerformanceCard(archive.benchmarkIds) }
+                    item { PerformanceCard(archive.benchmarkIds+archive.plans.filter{it.coldId in archive.benchmarkIds}.mapNotNull{it.workingId}) }
                 }
                 Destination.SETTINGS -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     item { PlaybackSettingsCard() }

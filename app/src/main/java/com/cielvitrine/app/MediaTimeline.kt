@@ -41,7 +41,7 @@ private data class TimelineDay(val date: LocalDate, val members: List<MediaItem>
 internal fun MediaTimeline(
     media: List<MediaItem>, modifier: Modifier = Modifier, open: (MediaItem) -> Unit,
     select: (MediaItem)->Unit = {}, selected: Set<String> = emptySet(),
-    cloudStatuses:Map<String,MediaCloudStatus> = emptyMap(),cloudDetails:(MediaItem,MediaCloudStatus)->Unit={_,_->},
+    cloudStatuses:Map<String,MediaCloudStatus> = emptyMap(),cloudDetails:(MediaItem,MediaCloudStatus)->Unit={_,_->},selecting:Boolean=false,
     thumbnail: @Composable (MediaItem, Modifier) -> Unit = { item, cell -> MediaThumb(item, cell) },
 ) {
     val zone = ZoneId.systemDefault()
@@ -112,8 +112,8 @@ internal fun MediaTimeline(
                     Box(Modifier.testTag("media:${item.uri}").aspectRatio(1f).combinedClickable(
                         onClick={open(item)},onLongClick={select(item)})) {
                         thumbnail(item,Modifier.fillMaxSize())
-                        val cloud=cloudStatuses[item.uri.toString()] ?: MediaCloudStatus(CloudMark.UNKNOWN,"Проверяем статус")
-                        Box(Modifier.align(Alignment.TopStart).padding(5.dp)){CloudBadge(cloud){cloudDetails(item,cloud)}}
+                        val cloud=cloudStatuses[item.uri.toString()] ?: MediaCloudStatus(CloudMark.LOCAL,"На телефоне","Сохранение в облаке пока не подтверждено")
+                        Box(Modifier.align(Alignment.TopStart).padding(5.dp)){CloudBadge(cloud){if(selecting)select(item) else cloudDetails(item,cloud)}}
                         if(item.binding in selected)Surface(Modifier.align(Alignment.TopEnd).padding(6.dp),color=MaterialTheme.colorScheme.primary,
                             shape=androidx.compose.foundation.shape.CircleShape){Text("✓",Modifier.padding(6.dp),color=MaterialTheme.colorScheme.onPrimary)}
                     }

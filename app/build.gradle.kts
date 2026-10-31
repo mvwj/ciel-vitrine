@@ -28,8 +28,8 @@ android {
         applicationId = "com.cielvitrine.app"
         minSdk = 29
         targetSdk = 36
-        versionCode = 12
-        versionName = "0.1.11"
+        versionCode = 14
+        versionName = "0.1.13"
         // OAuth Client ID is public. Never add a client secret or an access token here.
         manifestPlaceholders["YANDEX_CLIENT_ID"] = yandexManifestId
         manifestPlaceholders["YANDEX_OAUTH_HOST"] = "oauth.yandex.ru"
@@ -68,8 +68,9 @@ dependencies {
     // Installed offline already through Android test dependencies; enable worker JVM regressions.
     testImplementation("junit:junit:4.13.2")
     debugImplementation("androidx.compose.ui:ui-tooling")
-    androidTestImplementation("androidx.test:runner:1.6.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation(platform("androidx.compose:compose-bom:2025.10.01"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

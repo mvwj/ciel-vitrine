@@ -28,6 +28,12 @@ class LocalReleaseAndroidTest {
     @get:Rule val compose=createAndroidComposeRule<androidx.activity.ComponentActivity>()
     private val instrument get()=InstrumentationRegistry.getInstrumentation()
     private val context get()=instrument.targetContext
+    @org.junit.Before fun allowFixtureInventory() {
+        // Full suite runs on an isolated emulator; do not depend on permissions left by earlier tests.
+        val permissions=if(android.os.Build.VERSION.SDK_INT>=33)listOf(android.Manifest.permission.READ_MEDIA_IMAGES,android.Manifest.permission.READ_MEDIA_VIDEO)
+            else listOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+        permissions.forEach{instrument.uiAutomation.grantRuntimePermission(context.packageName,it)}
+    }
     private inner class Fixture:AutoCloseable {
         val id=ArchiveStore.randomId();val directory=File(context.noBackupFilesDir,"release-test-$id").apply{mkdir()}
         val alias="ciel.tests.release.$id"

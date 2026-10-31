@@ -21,7 +21,7 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
                     val saved = YandexSessionStore(applicationContext).load() ?: return Result.success()
                     if (saved.expiresAtMillis != null && saved.expiresAtMillis <= System.currentTimeMillis() || saved.appRootId.isNullOrBlank()) return Result.success()
                     var activeId:String?=null
-                    val cloud = YandexArchiveCloud(applicationContext, saved){stage,bytes,total->activeId?.let{TransferActivity.update(it,stage,bytes,total)}}
+                    val cloud = YandexArchiveCloud(applicationContext, saved,progress={stage,bytes,total->activeId?.let{TransferActivity.update(it,stage,bytes,total)}},timingId={activeId})
                     cloud.requireAccount(saved.uid, saved.appRootId!!)
                     applicationContext.getSharedPreferences("archive-queue-state",0).edit().remove("error").commit()
                     val stopping = { isStopped || store.paused() }
@@ -51,7 +51,7 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
                                 PerformanceJournal(applicationContext).timed(job.id, stage) { engine.step(job.id) }
                             }
                             val completed=store.load(job.id)
-                            if(completed.phase==ArchivePhase.VERIFIED && completed.mime.startsWith("image/"))TileWorker.enqueue(applicationContext,job.id)
+                            if(completed.phase==ArchivePhase.VERIFIED && completed.zone==OriginalZone.GALLERY && completed.mime.startsWith("image/"))TileWorker.enqueue(applicationContext,job.id)
                             if(completed.phase==ArchivePhase.VERIFIED)ProtectionWorker.enqueue(applicationContext)
                             setProgressAsync(workDataOf("phase" to store.load(job.id).phase.name))
                         } catch (error: Exception) {
@@ -188,15 +188,20 @@ internal class AndroidArchiveStaging(private val context: Context, private val s
 }
 
 internal class YandexArchiveCloud(private val context: Context, private val session: YandexSession,
-    private val progress:((String,Long,Long)->Unit)?=null) : TilePreparationCloud, RangedArchiveCloud {
+    private val progress:((String,Long,Long)->Unit)?=null,private val timingId:(()->String?)?=null,private val timingPrefix:String="") : TilePreparationCloud, RangedArchiveCloud {
     private val client = YandexDiskClient { session.token }
     private val reads = com.cielvitrine.archive.viewer.ViewCancellation()
+    private var checkedUntil=0L
     override fun requireAccount(uid: String, rootId: String) {
         val current = YandexSessionStore(context).load() ?: error("Sign-in required")
         require(current.uid == uid && current.appRootId == rootId && current.token == session.token)
+        val now=android.os.SystemClock.elapsedRealtime()
+        if(now<checkedUntil)return
         val account = ViewerRuntime.retrievals.read(reads) { client.connectionInfo(BuildConfig.YANDEX_CLIENT_ID) }
         require(account.uid == uid && account.appRootId == rootId)
+        checkedUntil=android.os.SystemClock.elapsedRealtime()+30_000
     }
+    fun requireFreshAccount(uid:String,rootId:String){checkedUntil=0;requireAccount(uid,rootId)}
     override fun ensureColdFolders() {
         client.ensureDirectory("app:/ciel-vitrine-v2"); client.ensureDirectory("app:/ciel-vitrine-v2/cold")
     }
@@ -212,7 +217,21 @@ internal class YandexArchiveCloud(private val context: Context, private val sess
             resource.modified?.takeIf { it.isNotBlank() } ?: error("No object version"), resource.byteLength ?: error("No object length"), resource.sha256)
     }
     override fun uploadNew(path: String, bytes: Long, open: () -> InputStream) {
-        client.uploadNew(path,bytes){object:FilterInputStream(open()) {
+        client.uploadNew(path,bytes,observe={timing,ok->
+            timingId?.invoke()?.let{id->
+                val metrics=PerformanceJournal(context)
+                metrics.record(id,"${timingPrefix}http_upload_link",timing.linkNanos,true)
+                metrics.record(id,"${timingPrefix}http_upload_body",timing.bodyNanos,ok,timing.bodyBytes)
+                metrics.record(id,"${timingPrefix}http_upload_request",timing.requestNanos,ok,timing.bodyBytes)
+            }
+            if(BuildConfig.DEBUG)runCatching{
+                val row=org.json.JSONObject().put("at",System.currentTimeMillis()).put("ok",ok).put("phase",timing.phase)
+                    .put("http_code",timing.responseCode ?: org.json.JSONObject.NULL).put("body_bytes",timing.bodyBytes)
+                    .put("body_ms",timing.bodyNanos/1e6).put("request_ms",timing.requestNanos/1e6).put("link_ms",timing.linkNanos/1e6)
+                val f=android.util.AtomicFile(File(context.filesDir,"upload-http-summary.json"));val out=f.startWrite()
+                try{out.write(row.toString(2).toByteArray());f.finishWrite(out)}catch(e:Exception){f.failWrite(out);throw e}
+            }
+        }){object:FilterInputStream(open()) {
             private var sent=0L;private var last=0L
             override fun read():Int {val b=`in`.read();if(b>=0)report(1);return b}
             override fun read(b:ByteArray,off:Int,len:Int):Int {val n=`in`.read(b,off,len);if(n>0)report(n);return n}

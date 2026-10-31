@@ -46,6 +46,7 @@ internal class TileReader(private val context:Context,val catalog:TileCatalog,
     private val cache=ViewerRuntime.cache(context)
     private val held=mutableListOf<RenderTile>()
     private val touched=mutableSetOf<String>()
+    @Synchronized internal fun cacheKeys():Set<String> = touched.toSet()
     private val snapshot=ViewerSnapshot(catalog.uid,catalog.root,catalog.id,catalog.containerSha,
         catalog.packs.joinToString(";"){"${it.id}:${it.remoteId}:${it.modified}:${it.sha}"},"tiles-v1:${catalog.originalSha}:$alias")
     init {catalog.validate();require(catalog.ready)}

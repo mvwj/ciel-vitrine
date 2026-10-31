@@ -51,4 +51,29 @@ class ProtectionStoreAndroidTest {
             assertThrows(IllegalArgumentException::class.java){store.saveProtection(saved)}
         }
     }
+    @Test fun oldSourceIndexMigratesWithoutChangingProofAndLargeLookupDoesNotHoldJournalLock()=isolated{directory,alias->
+        val original=cold()
+        ArchiveStore(context,directory,alias).use{it.save(original)}
+        val legacy=DeviceCipher(alias,"${context.packageName}:archive-database-v1").index("source:${original.source}")
+        SQLiteDatabase.openDatabase(File(directory,"archive-control.sqlite").path,null,SQLiteDatabase.OPEN_READWRITE).use{
+            it.execSQL("UPDATE jobs SET source_lookup=?",arrayOf(legacy))
+        }
+        ArchiveStore(context,directory,alias).use { store ->
+            assertEquals(original.copy(revision=1),store.forSources(listOf(original.source)).single())
+            val entered=java.util.concurrent.CountDownLatch(1);val proceed=java.util.concurrent.CountDownLatch(1)
+            val pool=java.util.concurrent.Executors.newFixedThreadPool(2)
+            try {
+                var first=true
+                val scan=pool.submit<List<ArchiveJob>>{store.forSources((0 until 10000).map{"content://fixture/$it"}+original.source){
+                    if(first){first=false;entered.countDown();check(proceed.await(15,java.util.concurrent.TimeUnit.SECONDS))}
+                }}
+                assertTrue(entered.await(10,java.util.concurrent.TimeUnit.SECONDS))
+                val action=pool.submit<ArchiveJob>{store.load(original.id)}
+                assertEquals(original.proof,action.get(10,java.util.concurrent.TimeUnit.SECONDS).proof)
+                proceed.countDown()
+                assertEquals(original.id,scan.get(30,java.util.concurrent.TimeUnit.SECONDS).single().id)
+                assertEquals(1,store.load(original.id).revision)
+            } finally {proceed.countDown();pool.shutdownNow()}
+        }
+    }
 }

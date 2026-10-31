@@ -29,7 +29,8 @@ class YandexDiskClient internal constructor(
         val path: String, val objectId: String?, val byteLength: Long?, val sha256: String?, val modified: String?,
     )
     data class Observation(val presence: ProviderObjectPresence, val resource: Resource? = null)
-    data class UploadReceipt(val accepted: Boolean, val needsReconciliation: Boolean)
+    data class UploadTimings(val linkNanos:Long,val requestNanos:Long,val bodyNanos:Long,val bodyBytes:Long,val phase:String="complete",val responseCode:Int?=null)
+    data class UploadReceipt(val accepted: Boolean, val needsReconciliation: Boolean,val timings:UploadTimings?=null)
 
     data class Account(val uid: String, val label: String, val totalBytes: Long, val usedBytes: Long, val appRootId: String?)
     enum class ConnectionProblem { UNAUTHORIZED, DISK_PERMISSION, APP_FOLDER_PERMISSION, APP_FOLDER_UNAVAILABLE, IDENTITY_MISMATCH, UNAVAILABLE }
@@ -103,14 +104,19 @@ class YandexDiskClient internal constructor(
     }
 
     /** Never overwrites another original. 202 is not treated as committed/verified. */
-    fun uploadNew(path: String, byteLength: Long, openSource: () -> InputStream): UploadReceipt {
+    fun uploadNew(path: String, byteLength: Long, observe:(UploadTimings,Boolean)->Unit={_,_->},openSource: () -> InputStream): UploadReceipt {
         require(byteLength >= 0)
+        val linkStarted=System.nanoTime()
         val link = signedLink("resources/upload", path, "PUT", mapOf("overwrite" to "false"))
+        val linkNanos=System.nanoTime()-linkStarted
+        var bodyNanos=0L;var bodyBytes=0L;var phase="connect";var code:Int?=null
         val body = object : RequestBody() {
             override fun contentType() = null
             override fun contentLength() = byteLength
             override fun isOneShot() = true
             override fun writeTo(sink: BufferedSink) {
+                val bodyStarted=System.nanoTime()
+                try {
                 openSource().use { source ->
                     var copied = 0L
                     val buffer = ByteArray(65536)
@@ -120,19 +126,34 @@ class YandexDiskClient internal constructor(
                         check(count > 0 && count <= byteLength - copied) { "Source length changed" }
                         sink.write(buffer, 0, count)
                         copied += count
+                        bodyBytes=copied
                     }
                     check(copied == byteLength) { "Incomplete source" }
                 }
+                }finally{bodyNanos=System.nanoTime()-bodyStarted}
             }
         }
         // The upload URL carries its own temporary authority. OAuth stays on the API host.
-        http.newCall(Request.Builder().url(link).put(body).build()).execute().use { response ->
+        val requestStarted=System.nanoTime()
+        val listener=object:okhttp3.EventListener() {
+            override fun dnsStart(call:okhttp3.Call,domainName:String){phase="dns"}
+            override fun connectStart(call:okhttp3.Call,inetSocketAddress:java.net.InetSocketAddress,proxy:java.net.Proxy){phase="connect"}
+            override fun secureConnectStart(call:okhttp3.Call){phase="tls"}
+            override fun requestHeadersStart(call:okhttp3.Call){phase="request_headers"}
+            override fun requestBodyStart(call:okhttp3.Call){phase="request_body"}
+            override fun requestBodyEnd(call:okhttp3.Call,byteCount:Long){phase="server_response"}
+            override fun responseHeadersStart(call:okhttp3.Call){phase="response_headers"}
+        }
+        var success=false
+        try {http.newBuilder().eventListener(listener).build().newCall(Request.Builder().url(link).put(body).build()).execute().use { response ->
+            code=response.code;success=code==201 || code==202
+            val timing=UploadTimings(linkNanos,System.nanoTime()-requestStarted,bodyNanos,bodyBytes,phase,code)
             return when (response.code) {
-                201 -> UploadReceipt(true, false)
-                202 -> UploadReceipt(true, true)
+                201 -> UploadReceipt(true, false,timing)
+                202 -> UploadReceipt(true, true,timing)
                 else -> error("Yandex upload failed (HTTP ${response.code}); reconcile before retry")
             }
-        }
+        }}finally{runCatching{observe(UploadTimings(linkNanos,System.nanoTime()-requestStarted,bodyNanos,bodyBytes,phase,code),success)}}
     }
 
     /** Caller must digest/recover the entire stream before accepting an exact-copy proof. */
