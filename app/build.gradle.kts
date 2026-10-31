@@ -1,10 +1,23 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
-val yandexClientId = "00000000000000000000000000000000"
+val localOAuth = Properties().apply {
+    val file = rootProject.file("oauth.properties")
+    if (file.isFile) file.inputStream().use { load(it) }
+}
+val yandexClientId = providers.gradleProperty("yandexClientId")
+    .orElse(providers.environmentVariable("YANDEX_CLIENT_ID"))
+    .orElse(localOAuth.getProperty("yandex.clientId", "")).get().trim()
+require(yandexClientId.isEmpty() || yandexClientId.matches(Regex("[0-9a-f]{32}"))) {
+    "Yandex Client ID must be empty or 32 lowercase hexadecimal characters"
+}
+// A disconnected build remains usable as a local gallery. This public placeholder is not an OAuth registration.
+val yandexManifestId = yandexClientId.ifEmpty { "00000000000000000000000000000000" }
 
 android {
     namespace = "com.cielvitrine.app"
@@ -15,10 +28,10 @@ android {
         applicationId = "com.cielvitrine.app"
         minSdk = 29
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.1.10"
+        versionCode = 12
+        versionName = "0.1.11"
         // OAuth Client ID is public. Never add a client secret or an access token here.
-        manifestPlaceholders["YANDEX_CLIENT_ID"] = yandexClientId
+        manifestPlaceholders["YANDEX_CLIENT_ID"] = yandexManifestId
         manifestPlaceholders["YANDEX_OAUTH_HOST"] = "oauth.yandex.ru"
         buildConfigField("String", "YANDEX_CLIENT_ID", "\"$yandexClientId\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

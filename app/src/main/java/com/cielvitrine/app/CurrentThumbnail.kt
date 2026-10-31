@@ -17,6 +17,11 @@ internal object CurrentThumbnail {
         override fun sizeOf(key:Key,value:Bitmap)=value.allocationByteCount
     }
     suspend fun load(context:Context,item:MediaItem):Bitmap = slots.withPermit {
+        item.previewId?.let{id -> return@withPermit ArchiveStore(context).use{store ->
+            val plan=store.protection(id) ?: error("Миниатюра недоступна")
+            require(plan.workingId==item.cloudId)
+            ProtectedThumbnail(context).load(store.load(id),plan.previewSha ?: error("Миниатюра недоступна"))
+        }}
         if(item.isVideo)return@withPermit context.contentResolver.loadThumbnail(item.uri,Size(320,320),null)
         // Permission is checked even on a cache hit; a revoked grant cannot serve a new request.
         openDisplayOriginal(context,item.uri).close()

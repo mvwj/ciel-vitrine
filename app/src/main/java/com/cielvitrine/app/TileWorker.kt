@@ -34,10 +34,12 @@ class TileWorker(context:Context,params:WorkerParameters):Worker(context,params)
                         val cloud=YandexArchiveCloud(context,session);cloud.requireAccount(job.uid!!,job.rootId!!);cloud.ensureTileFolders()
                         val producer=TileProducer(context,catalogs,directory,{isStopped || journal.paused()})
                         producer.prepare(job,cloud)
+                        ProtectionWorker.enqueue(context)
                         Result.success()
                     } catch(error:Exception) {
                         recordTileFailure(context,id,error)
                         if(!isStopped && !journal.paused())runCatching{catalogs.load(id)?.let{catalogs.save(it.copy(deferred=true))}}
+                        ProtectionWorker.enqueue(context)
                         // Uncertain pack attempts remain persisted and can only be read back on resume.
                         Result.success()
                     }

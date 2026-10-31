@@ -9,6 +9,19 @@ node_modules/
 .env.development.local
 .env.test.local
 .env.production.local
+.env.*
+!.env.example
+oauth.properties
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.key
+*.bundle
+*.log
+captures/
+private-backups/
 
 # Build outputs
 dist/

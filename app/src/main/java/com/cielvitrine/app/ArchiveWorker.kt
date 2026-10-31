@@ -20,8 +20,10 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
                 lock.use {
                     val saved = YandexSessionStore(applicationContext).load() ?: return Result.success()
                     if (saved.expiresAtMillis != null && saved.expiresAtMillis <= System.currentTimeMillis() || saved.appRootId.isNullOrBlank()) return Result.success()
-                    val cloud = YandexArchiveCloud(applicationContext, saved)
+                    var activeId:String?=null
+                    val cloud = YandexArchiveCloud(applicationContext, saved){stage,bytes,total->activeId?.let{TransferActivity.update(it,stage,bytes,total)}}
                     cloud.requireAccount(saved.uid, saved.appRootId!!)
+                    applicationContext.getSharedPreferences("archive-queue-state",0).edit().remove("error").commit()
                     val stopping = { isStopped || store.paused() }
                     val staging = AndroidArchiveStaging(applicationContext, stopping, store, cloud)
                     staging.cleanVerifiedOwned(store)
@@ -29,6 +31,7 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
                     val deadline = System.nanoTime() + 180_000_000_000L
                     while (!stopping() && System.nanoTime() < deadline) {
                         val job = store.next() ?: break
+                        activeId=job.id;TransferActivity.update(job.id,"prepare")
                         try {
                             if (job.uid == null) {
                                 cloud.requireAccount(saved.uid, saved.appRootId!!)
@@ -40,16 +43,18 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
                                 val multipart = AndroidMultipartStore(applicationContext, bound)
                                 val source = AndroidMultipartStaging(applicationContext, bound, store, cloud, stopping)
                                 MultipartArchive(store, multipart, source, cloud, stopping, timed = { stage, action ->
-                                    PerformanceJournal(applicationContext).timed(job.id, stage, action)
+                                    TransferActivity.update(job.id,stage);PerformanceJournal(applicationContext).timed(job.id, stage, action)
                                 }).step(job.id)
                             } else {
                                 val stage = when (job.phase) { ArchivePhase.QUEUED -> "prepare"; ArchivePhase.PREPARED -> "upload"; else -> "verify" }
+                                TransferActivity.update(job.id,stage)
                                 PerformanceJournal(applicationContext).timed(job.id, stage) { engine.step(job.id) }
                             }
                             val completed=store.load(job.id)
                             if(completed.phase==ArchivePhase.VERIFIED && completed.mime.startsWith("image/"))TileWorker.enqueue(applicationContext,job.id)
+                            if(completed.phase==ArchivePhase.VERIFIED)ProtectionWorker.enqueue(applicationContext)
                             setProgressAsync(workDataOf("phase" to store.load(job.id).phase.name))
-                        } catch (_: Exception) {
+                        } catch (error: Exception) {
                             if (stopping()) break
                             val current = store.load(job.id)
                             if (current.phase == ArchivePhase.VERIFIED) {
@@ -60,14 +65,15 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
                             cloud.requireAccount(saved.uid, saved.appRootId!!)
                             store.save(current.copy(deferred = true, notice = if (current.phase == ArchivePhase.UPLOAD_UNCERTAIN)
                                 "Результат загрузки не подтверждён. Повторяется только проверка; исходник и контейнер сохранены."
-                            else "Операция приостановлена. Проверьте аккаунт, свободное место, сеть и доступ к оригиналу с метаданными. Исходник сохранён."))
-                        }
+                            else "${archiveFailureReason(error)} Исходник сохранён."))
+                        } finally {TransferActivity.clear(job.id);activeId=null}
                     }
                     if (!stopping() && store.next() != null) enqueue(applicationContext)
                 }
             }
             Result.success()
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            applicationContext.getSharedPreferences("archive-queue-state",0).edit().putString("error",archiveFailureReason(error)).commit()
             if (!isStopped && runAttemptCount < 2) Result.retry() else Result.success()
         }
     }
@@ -77,6 +83,19 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
                 .addTag("cold-archive").setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS).build())
         }
+    }
+}
+
+internal fun archiveFailureReason(error:Throwable):String {
+    val causes=generateSequence(error){it.cause}.take(8).toList()
+    return when {
+        causes.any{it is java.net.SocketTimeoutException || it is java.io.InterruptedIOException}->"Яндекс не ответил вовремя. Проверьте сеть и повторите."
+        causes.any{it is java.net.UnknownHostException || it is java.net.ConnectException}->"Нет связи с Яндексом. Очередь сохранена."
+        causes.any{it is SecurityException}->"Нет доступа к исходному файлу или его метаданным."
+        causes.any{it.message?.contains("HTTP 401")==true || it.message?.contains("HTTP 403")==true}->"Яндекс отклонил доступ. Повторите вход с прежним аккаунтом."
+        causes.any{it.message?.contains("HTTP 429")==true}->"Яндекс временно ограничил запросы. Повторите позже."
+        causes.any{it.message?.contains("budget",true)==true || it.message?.contains("мест",true)==true}->"Не хватает временного места или свободной памяти. Исходник сохранён."
+        else->"Проверка или передача не завершена. Нажмите «Продолжить» на вкладке «Облако»."
     }
 }
 
@@ -168,7 +187,8 @@ internal class AndroidArchiveStaging(private val context: Context, private val s
     }
 }
 
-internal class YandexArchiveCloud(private val context: Context, private val session: YandexSession) : TilePreparationCloud, RangedArchiveCloud {
+internal class YandexArchiveCloud(private val context: Context, private val session: YandexSession,
+    private val progress:((String,Long,Long)->Unit)?=null) : TilePreparationCloud, RangedArchiveCloud {
     private val client = YandexDiskClient { session.token }
     private val reads = com.cielvitrine.archive.viewer.ViewCancellation()
     override fun requireAccount(uid: String, rootId: String) {
@@ -191,7 +211,14 @@ internal class YandexArchiveCloud(private val context: Context, private val sess
         return ArchiveRemote(resource.objectId?.takeIf { it.isNotBlank() } ?: error("No object identity"),
             resource.modified?.takeIf { it.isNotBlank() } ?: error("No object version"), resource.byteLength ?: error("No object length"), resource.sha256)
     }
-    override fun uploadNew(path: String, bytes: Long, open: () -> InputStream) { client.uploadNew(path, bytes, open) }
+    override fun uploadNew(path: String, bytes: Long, open: () -> InputStream) {
+        client.uploadNew(path,bytes){object:FilterInputStream(open()) {
+            private var sent=0L;private var last=0L
+            override fun read():Int {val b=`in`.read();if(b>=0)report(1);return b}
+            override fun read(b:ByteArray,off:Int,len:Int):Int {val n=`in`.read(b,off,len);if(n>0)report(n);return n}
+            private fun report(n:Int){sent+=n;val now=System.nanoTime();if(now-last>=250_000_000L || sent==bytes){progress?.invoke("upload",sent,bytes);last=now}}
+        }}
+    }
     override fun <T> readback(path: String, read: (InputStream) -> T): T = ViewerRuntime.retrievals.read(reads) { client.fullReadback(path, read) }
     override fun openRange(path: String, offset: Long, expected: ArchiveRemote): ArchiveRangeResult {
         require(inspect(path) == expected) { "Container revision changed" }

@@ -1,0 +1,17 @@
+name: Feature request / Предложение
+description: Describe a concrete use case or improvement.
+title: "[Feature] "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would this help you do?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the workflow and any effect on original files or cloud storage.
+    validations:
+      required: true

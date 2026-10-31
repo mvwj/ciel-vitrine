@@ -47,6 +47,11 @@ class YandexCloudModel internal constructor(app: Application, private val store:
     } } }
 
     fun beginLogin(): Boolean {
+        if (BuildConfig.YANDEX_CLIENT_ID.isBlank()) {
+            mutable.value = YandexCloudState(YandexConnection.DISCONNECTED,
+                message = "В этой сборке не настроен Яндекс OAuth. Укажите свой Client ID в локальном oauth.properties и пересоберите приложение.")
+            return false
+        }
         if (mutable.value.busy || mutable.value.connection == YandexConnection.STORAGE_ERROR) return false
         mutable.value = mutable.value.copy(connection = YandexConnection.SIGNING_IN, message = null)
         return true

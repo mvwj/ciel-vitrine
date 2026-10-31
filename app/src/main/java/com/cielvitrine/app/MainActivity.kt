@@ -107,7 +107,15 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     var selectionMode by rememberSaveable { mutableStateOf(false) }
     var selection by rememberSaveable { mutableStateOf(listOf<String>()) }
     var pendingSelected by rememberSaveable { mutableStateOf(false) }
-    val selectionItems=remember(state.media,selection){state.media.filter{it.binding!=null && it.binding in selection}}
+    val library=remember(state.media,archive.remoteMedia){(state.media+archive.remoteMedia).sortedByDescending{it.date}}
+    var saveMode by rememberSaveable { mutableStateOf(SaveMode.KEEP_LOCAL) }
+    var saveDialog by remember { mutableStateOf(false) }
+    var completeSet by rememberSaveable { mutableStateOf(false) }
+    var cloudDetail by remember { mutableStateOf<MediaCloudStatus?>(null) }
+    var releaseIds by rememberSaveable { mutableStateOf(listOf<String>()) }
+    var autoReleaseAttempted by rememberSaveable { mutableStateOf(listOf<String>()) }
+    val selectionItems=remember(library,selection){library.filter{it.binding!=null && it.binding in selection}}
+    val selectionLocalItems=selectionItems.filter{it.cloudId==null}
     fun selectItem(item:MediaItem){item.binding?.let { key -> selectionMode=true;selection=if(key in selection)selection-key else selection+key }}
     var addAlbum by remember { mutableStateOf(false) }
     var providerDialog by remember { mutableStateOf(false) }
@@ -120,7 +128,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     val originalPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (pendingAll) { pendingAll = false; if(granted)archiveModel.prepareAll() else model.message("Для архива оригинала нужен доступ к исходным метаданным") }
         if (pendingSelected) { pendingSelected=false
-            if(granted && selectionItems.size==selection.size)archiveModel.addSelected(selectionItems)
+            if(granted && selectionItems.size==selection.size && selectionLocalItems.isNotEmpty())archiveModel.protectSelected(selectionLocalItems,saveMode,completeSet)
             else model.message("Не все выбранные оригиналы доступны с исходными метаданными. Выбор сохранён.")
         }
     }
@@ -129,6 +137,20 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     var pendingContainerHash by rememberSaveable { mutableStateOf<String?>(null) }
     var restore by rememberSaveable { mutableStateOf(false) }
     val fileScope = rememberCoroutineScope()
+    val removeLocal = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        archiveModel.releaseResult(releaseIds,result.resultCode==android.app.Activity.RESULT_OK)
+        releaseIds=emptyList();model.refresh()
+    }
+    fun releaseLocal(ids:List<String>) {
+        fileScope.launch {
+            try {
+                val request=archiveModel.prepareRelease(ids)
+                releaseIds=ids
+                removeLocal.launch(androidx.activity.result.IntentSenderRequest.Builder(request.intentSender).build())
+            }catch(e:kotlinx.coroutines.CancellationException){throw e}
+            catch(error:Exception){model.message(if(error is ReleaseNotReady)error.message else "Освобождение места остановлено: не все проверки пройдены. Оригиналы на телефоне сохранены.")}
+        }
+    }
     val createFile = rememberLauncherForActivityResult(OriginalDocumentContract()) { uri ->
         val source = pendingSource
         if (uri != null && source != null) model.portableFile(android.net.Uri.parse(source), uri, restore, pendingContainerHash)
@@ -157,15 +179,27 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
         else if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
         else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
     val owner = LocalLifecycleOwner.current
+    val lifecycleState by owner.lifecycle.currentStateFlow.collectAsStateWithLifecycle()
+    LaunchedEffect(archive.plans,lifecycleState,archive.busy,releaseIds) {
+        if(lifecycleState==Lifecycle.State.RESUMED && !archive.busy && releaseIds.isEmpty()) {
+            val ready=archive.plans.filter{it.stage==ProtectionStage.READY && it.checkedAt==null && it.coldId !in autoReleaseAttempted && ProtectionRules.setReady(it,archive.plans)}.take(32)
+            if(ready.isNotEmpty()) {
+                val ids=ready.map{it.coldId}
+                autoReleaseAttempted=(autoReleaseAttempted+ids).takeLast(240)
+                releaseLocal(ids)
+            }
+        }
+    }
     DisposableEffect(owner) {
         val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) model.refresh() }
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
     LaunchedEffect(Unit) { model.refresh() }
+    LaunchedEffect(state.media) { archiveModel.libraryChanged(state.media) }
     LaunchedEffect(state.media, state.loading) {
         val shown = selected
-        if (!state.loading && shown?.binding != null) {
+        if (!state.loading && shown?.binding != null && shown.cloudId==null) {
             val current = state.media.firstOrNull { it.binding == shown.binding }
             if (current == null) {
                 selected = null
@@ -181,8 +215,8 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     LaunchedEffect(yandex.message) { yandex.message?.let { model.message(it); cloudModel.clearMessage() } }
     LaunchedEffect(yandex.connection, yandex.account?.uid) { if (yandex.account != null && state.cloud?.provider != "Яндекс Диск") model.chooseCloud("Яндекс Диск")
         if (yandex.connection == YandexConnection.CONNECTED) archiveModel.accountConnected() }
-    val filtered = remember(state.media, state.favorites, state.albums, folder, albumFilter, favoriteFilter) {
-        state.media.filter { item -> (folder == null || item.folder == folder) && (!favoriteFilter || state.favorites.containsMedia(item)) &&
+    val filtered = remember(library, state.favorites, state.albums, folder, albumFilter, favoriteFilter) {
+        library.filter { item -> (folder == null || item.folder == folder) && (!favoriteFilter || state.favorites.containsMedia(item)) &&
             (albumFilter == null || (state.albums.firstOrNull { it.name == albumFilter }?.members ?: emptySet()).containsMedia(item)) }
     }
     BackHandler(selectionMode || folder != null || albumFilter != null || favoriteFilter) {
@@ -209,43 +243,49 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                 }
             }
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = Accent)
+            if(archive.checkingRelease)Column(Modifier.fillMaxWidth().padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text("Проверяем обе облачные копии перед освобождением места. Оригиналы пока на телефоне.",style=MaterialTheme.typography.bodySmall)
+            }
             when (destination) {
                 Destination.PHOTOS -> {
+                    CloudActivityCard(archive,yandex){destination=Destination.CLOUD}
                     if (state.access != MediaAccess.FULL) InfoCard(
                         if (state.access == MediaAccess.NONE) "Откройте свою медиатеку" else "Доступна часть медиатеки",
                         if (state.access == MediaAccess.NONE) "Фото и видео остаются на телефоне. Вы сами выбираете, к чему дать доступ." else "Отсутствие доступа не означает, что файл удалён.",
                         Icons.Outlined.PhotoLibrary, "Выбрать фото и видео", { requestMedia() })
-                    if (state.media.isNotEmpty()) Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (library.isNotEmpty()) Row(Modifier.padding(horizontal = 24.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilterChip(selected = !favoriteFilter, onClick = { favoriteFilter = false }, label = { Text("Все") })
                         FilterChip(selected = favoriteFilter, onClick = { favoriteFilter = !favoriteFilter }, label = { Text("Избранное") }, leadingIcon = { Icon(Icons.Outlined.FavoriteBorder, null, Modifier.size(16.dp)) })
                     }
-                    if(state.media.isNotEmpty())Row(Modifier.padding(horizontal=16.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                    if(library.isNotEmpty())Row(Modifier.padding(horizontal=16.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick={selectionMode=!selectionMode;if(!selectionMode)selection=emptyList()}){Text(if(selectionMode)"Готово · ${selectionItems.size}" else "Выбрать")}
                         if(selectionMode)TextButton(onClick={selection=filtered.mapNotNull{it.binding}.take(240)}){Text("Выбрать все")}
                     }
                     if(selectionMode && selectionItems.isNotEmpty()) {
                         Row(Modifier.padding(horizontal=16.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                            Button(enabled=!archive.busy && selectionItems.size<=240,onClick={pendingSelected=true;originalPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)}){Text("В облако (${selectionItems.size})")}
+                            Button(enabled=!archive.busy && selectionLocalItems.isNotEmpty() && selectionItems.size<=240,onClick={completeSet=false;saveDialog=true}){Text(if(selectionLocalItems.isEmpty())"Уже в облаке" else "В облако (${selectionLocalItems.size})")}
                             TextButton(onClick={selectionItems.filter{!state.favorites.containsMedia(it)}.forEach{model.favorite(it)}}){Text("В избранное")}
                             TextButton(onClick={addAlbum=true}){Text("В альбом")}
                         }
-                        Text("Загрузка создаёт холодный архив и сохраняет исходники на телефоне. Удаление и освобождение места пока недоступны.",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.bodySmall)
+                        Text("Выберите: оставить оригиналы на телефоне или освободить место после сохранения холодного архива и рабочей копии.",Modifier.padding(horizontal=16.dp),style=MaterialTheme.typography.bodySmall)
                     }
                     if (filtered.isEmpty() && state.access != MediaAccess.NONE && !state.loading) EmptyState("Здесь будут ваши снимки", "Добавьте фото на телефон или измените выбранный доступ.", Icons.Outlined.Photo)
-                    else MediaTimeline(filtered, Modifier.weight(1f),open={if(selectionMode)selectItem(it)else selected=it},select={selectItem(it)},selected=selection.toSet())
+                    else MediaTimeline(filtered, Modifier.weight(1f),open={if(selectionMode)selectItem(it)else selected=it},select={selectItem(it)},selected=selection.toSet(),
+                        cloudStatuses=archive.mediaStatus,cloudDetails={_,status->cloudDetail=status})
                 }
                 Destination.ALBUMS -> LazyColumn(contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                    item { CollectionCard("Избранное", collectionSummary(state.favorites, state.media), state.media.firstOrNull { state.favorites.containsMedia(it) }, Icons.Outlined.FavoriteBorder) { favoriteFilter = true; destination = Destination.PHOTOS } }
+                    item { CollectionCard("Избранное", collectionSummary(state.favorites, library), library.firstOrNull { state.favorites.containsMedia(it) }, Icons.Outlined.FavoriteBorder) { favoriteFilter = true; destination = Destination.PHOTOS } }
                     if (state.favorites.any { it.startsWith("content:") } || state.albums.any { a -> a.members.any { it.startsWith("content:") } }) item {
                         Text("Прежние записи альбомов сохранены. Добавьте нужные фото заново, чтобы подтвердить их привязку.", style = MaterialTheme.typography.bodySmall, color = Accent)
                     }
                     if (state.albums.isNotEmpty()) item { Text("АЛЬБОМЫ", style = MaterialTheme.typography.labelMedium, color = Accent) }
-                    state.albums.forEach { a -> item { CollectionCard(a.name, collectionSummary(a.members, state.media), state.media.firstOrNull { a.members.containsMedia(it) }, Icons.Outlined.CollectionsBookmark) { albumFilter = a.name; destination = Destination.PHOTOS } } }
+                    state.albums.forEach { a -> item { CollectionCard(a.name, collectionSummary(a.members, library), library.firstOrNull { a.members.containsMedia(it) }, Icons.Outlined.CollectionsBookmark) { albumFilter = a.name; destination = Destination.PHOTOS } } }
                     item { Text("ПАПКИ УСТРОЙСТВА", style = MaterialTheme.typography.labelMedium, color = Accent) }
                     state.media.groupBy { it.folder }.forEach { (name, members) -> item { CollectionCard(name, "${members.size} файлов", members.first(), Icons.Outlined.FolderOpen) { folder = name; destination = Destination.PHOTOS } } }
                 }
                 Destination.CLOUD -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    item { PerformanceCard(archive.benchmarkIds) }
+                    item { CloudActivityCard(archive,yandex){} }
                     if (state.cloud?.provider != "Google Drive" || yandex.account != null) item {
                         YandexAccountCard(yandex, { signInYandex() }, { cloudModel.recheck() }, { cloudModel.disconnect() })
                     } else item { InfoCard("Google Drive", "Подключение Google Drive появится позже. Сейчас доступен вход через Яндекс Диск.", Icons.Outlined.CloudQueue, "Выбрать Яндекс Диск", { model.chooseCloud("Яндекс Диск") }) }
@@ -253,8 +293,15 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                         InfoCard("Одно облако. Две зоны.", "Сначала — проверенный холодный архив, затем — рабочая копия галереи. Политика сохраняется при выборе облака.", Icons.Outlined.CloudQueue, "Выбрать облако", { providerDialog = true })
                     }
                     item { ZoneCard("01", "Холодный архив", "Точные исходные файлы. Отдельный жизненный цикл, восстановление без личного ключа.", Icons.Outlined.Inventory2) }
-                    item { ZoneCard("02", "Рабочая галерея", "Отдельные оригиналы уже можно создать из архива. Миниатюры и открытие из облака — следующий этап.", Icons.Outlined.PhotoLibrary) }
-                    item { InfoCard("Освобождение места — отдельное действие", "Загрузка не удаляет оригиналы с телефона. Удаление будет доступно после проверки копий и подтверждения Android.", Icons.Outlined.VerifiedUser) }
+                    item { ZoneCard("02", "Рабочая галерея", "Отдельная копия оригинала для просмотра. Холодный архив сохраняется независимо.", Icons.Outlined.PhotoLibrary) }
+                    val readyPlans=archive.plans.filter{it.stage in setOf(ProtectionStage.READY,ProtectionStage.ANDROID_REQUESTED) && ProtectionRules.setReady(it,archive.plans)}.take(32)
+                    if(readyPlans.isNotEmpty())item { Button(enabled=!archive.busy,onClick={releaseLocal(readyPlans.map{it.coldId})},modifier=Modifier.padding(horizontal=16.dp).fillMaxWidth()) {
+                        Text("Освободить место · ${readyPlans.size} файлов")
+                    } }
+                    archive.plans.filter{it.mode==SaveMode.FREE_LOCAL || it.stage==ProtectionStage.ERROR}.take(32).forEach { plan ->
+                        item(key="plan:${plan.coldId}"){ProtectionCard(plan,archive.busy,{releaseLocal(listOf(plan.coldId))},{archiveModel.retryProtection(plan.coldId)},ProtectionRules.setReady(plan,archive.plans))}
+                    }
+                    item { InfoCard("Два способа загрузки", "Выделите фото в ленте → «В облако». Можно оставить оригиналы на телефоне или освободить место после проверки обеих копий. Для удаления Android покажет подтверждение.", Icons.Outlined.VerifiedUser) }
                     item { InfoCard("Архивировать доступную медиатеку", "Подготовьте очередь до входа в Яндекс. Учтём все доступные фото и видео, включая большие файлы. Большие файлы загружаются проверяемыми частями без пересжатия. Если Android разрешил только часть медиатеки, архивируем эту часть.", Icons.Outlined.Inventory2,
                         if (!archive.busy) (if (state.access == MediaAccess.NONE) "Разрешить доступ" else "Подготовить все фото и видео") else null,
                         { if (state.access == MediaAccess.NONE) requestMedia() else allInfo = true }) }
@@ -287,7 +334,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                                     com.cielvitrine.archive.ArchivePhase.UNSUPPORTED_SIZE -> "Файл ожидает перевода на загрузку частями"
                                 }, style = MaterialTheme.typography.bodyMedium)
                                 Text("${if (job.zone == com.cielvitrine.archive.OriginalZone.COLD) "Холодный архив" else "Рабочая копия"} · ${job.sourceBytes?.let { "$it байт" } ?: "размер уточняется"}", style = MaterialTheme.typography.bodySmall)
-                                Text("${job.uid?.let { "Аккаунт Яндекса: $it" } ?: "Аккаунт будет привязан перед первой загрузкой"} · исходник сохранён", style = MaterialTheme.typography.bodySmall)
+                                Text(if(archive.plans.any{it.coldId==job.id && it.stage==ProtectionStage.LOCAL_REMOVED})"На телефоне осталась миниатюра" else "Оригинал сохраняется на телефоне до отдельного подтверждения", style = MaterialTheme.typography.bodySmall)
                                 job.sourceStamp?.let { Text("${it.width} × ${it.height}${if (it.durationMillis > 0) " · ${it.durationMillis / 1000} с" else ""}", style = MaterialTheme.typography.bodySmall) }
                                 job.verifiedAt?.let { Text("Проверено ${dateLabel(it)}. Доступность облачной копии может измениться.", style = MaterialTheme.typography.bodySmall) }
                                 job.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
@@ -308,6 +355,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                     } }
                     if (archive.hasMore) item { TextButton(onClick = { archiveModel.more() }, modifier = Modifier.padding(horizontal = 24.dp)) { Text("Следующие записи очереди") } }
                     if (archive.olderPage) item { TextButton(onClick = { archiveModel.first() }, modifier = Modifier.padding(horizontal = 24.dp)) { Text("К новым записям") } }
+                    item { PerformanceCard(archive.benchmarkIds) }
                 }
                 Destination.SETTINGS -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     item { PlaybackSettingsCard() }
@@ -323,11 +371,26 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
     }
 
     selected?.let { item ->
-        val pages=if(item.cloudId!=null)archive.jobs.filter{it.phase==com.cielvitrine.archive.ArchivePhase.VERIFIED}.map{it.mediaItem()}
+        val pages=if(item.cloudId!=null)(archive.remoteMedia+archive.jobs.filter{it.phase==com.cielvitrine.archive.ArchivePhase.VERIFIED}.map{it.mediaItem()}).distinctBy{it.uri}
             else filtered.map{local-> archive.jobs.firstOrNull{it.zone==com.cielvitrine.archive.OriginalZone.COLD && it.matches(local)}?.let{job->local.copy(performanceId=job.id)}?:local}
         GalleryViewer(pages,item,close={selected=null},isFavorite={state.favorites.containsMedia(it)},favorite={model.favorite(it)},
             album={selected=it;addAlbum=true},changed={selected=it})
     }
+    cloudDetail?.let { status -> AlertDialog(onDismissRequest={cloudDetail=null},title={Text(status.title)},
+        text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Text(status.detail)
+            if(status.coldVerified)Text("Холодный архив проверен. Значок отражает последнюю проверку; доступность облака может измениться.",style=MaterialTheme.typography.bodySmall)
+            status.progress?.let{LinearProgressIndicator(progress={it},modifier=Modifier.fillMaxWidth());Text("${(it*100).toInt()}% текущей части")}
+            Text("Облачко с галочкой — сохранено; коробка — только архив; перечёркнутое облако — только телефон; стрелка — загрузка; восклицание — нужна проверка.",style=MaterialTheme.typography.bodySmall)
+        }},confirmButton={TextButton(onClick={cloudDetail=null;destination=Destination.CLOUD}){Text("Открыть облако")}},dismissButton={TextButton(onClick={cloudDetail=null}){Text("Закрыть")}}) }
+    if(saveDialog)AlertDialog(onDismissRequest={saveDialog=false},title={Text("Сохранить ${selectionLocalItems.size} файлов")},
+        text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            Text("Сначала создадим холодный архив, затем отдельную рабочую копию. Оригиналы не пересжимаются.")
+            Button(onClick={saveMode=SaveMode.KEEP_LOCAL;saveDialog=false;pendingSelected=true;originalPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)},modifier=Modifier.fillMaxWidth()){Text("Загрузить и оставить на телефоне")}
+            Row(verticalAlignment=Alignment.CenterVertically){Checkbox(completeSet,{completeSet=it});Text("Выбраны все части снимков, включая отдельные видео Live Photo и сопутствующие файлы",style=MaterialTheme.typography.bodySmall)}
+            OutlinedButton(enabled=completeSet && Build.VERSION.SDK_INT>=30,onClick={saveMode=SaveMode.FREE_LOCAL;autoReleaseAttempted=emptyList();saveDialog=false;pendingSelected=true;originalPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)},modifier=Modifier.fillMaxWidth()){Text("Загрузить и освободить место")}
+            Text("На телефоне останутся миниатюры. Когда все проверки закончатся, открытая галерея покажет подтверждение Android. Отменённое удаление можно повторить на вкладке «Облако». Для форматов без проверенного просмотра удаление заблокировано.",style=MaterialTheme.typography.bodySmall)
+        }},confirmButton={TextButton(onClick={saveDialog=false}){Text("Закрыть")}})
     if (addAlbum) {
         var name by remember { mutableStateOf("") }
         AlertDialog(onDismissRequest = { addAlbum = false }, title = { Text(if (selected == null) "Новый альбом" else "Добавить в альбом") },
@@ -344,7 +407,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
         }
     }, confirmButton = {}, dismissButton = { TextButton(onClick = { providerDialog = false }) { Text("Позже") } })
     if (coldInfo) AlertDialog(onDismissRequest = { coldInfo = false }, title = { Text("Сохранить холодную копию") }, text = {
-        Text("Будет создан отдельный контейнер на Яндекс Диске. Ключ и описание восстановления находятся внутри: облако технически может прочитать файл. На этом этапе выбирается один файл до 128 МиБ; пары Live Photo нужно сохранять по отдельности. Проверка потребует загрузить контейнер и скачать его полностью. Исходник сохранится.")
+        Text("Будет создан отдельный холодный архив на Яндекс Диске без пересжатия. Ключ восстановления находится внутри: облако технически может прочитать файл. Большие файлы сохраняются частями. Все части Live Photo нужно добавить отдельно. После загрузки проверим исходные байты. Файл останется на телефоне.")
     }, confirmButton = { TextButton(onClick = { coldInfo = false; selectColdFile.launch(arrayOf("*/*")) }) { Text("Выбрать файл") } },
         dismissButton = { TextButton(onClick = { coldInfo = false }) { Text("Отмена") } })
     if (allInfo) AlertDialog(onDismissRequest = { allInfo = false }, title = { Text("Подготовить холодный архив") }, text = {

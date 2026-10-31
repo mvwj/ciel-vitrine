@@ -1,0 +1,3 @@
+# Copy to oauth.properties (ignored by Git) and insert your own public OAuth Client ID.
+# Never put a client secret, access token or password in this file or the Android app.
+yandex.clientId=

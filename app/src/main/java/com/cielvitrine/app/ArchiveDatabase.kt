@@ -18,7 +18,7 @@ data class ArchiveCounts(val phases: Map<ArchivePhase, Long>, val deferred: Long
 internal class ArchiveStore(context: Context, internal val directory: File = context.noBackupFilesDir,
     private val keyAlias: String = "ciel.archive.database.v1") : ArchiveJournal, AutoCloseable {
     private val cipher = DeviceCipher(keyAlias, "${context.packageName}:archive-database-v1")
-    private val helper = object : SQLiteOpenHelper(context, File(directory, "archive-control.sqlite").absolutePath, null, 1) {
+    private val helper = object : SQLiteOpenHelper(context, File(directory, "archive-control.sqlite").absolutePath, null, 2) {
         override fun onConfigure(db: SQLiteDatabase) { db.setForeignKeyConstraintsEnabled(true); db.execSQL("PRAGMA synchronous=FULL") }
         override fun onCreate(db: SQLiteDatabase) {
             db.execSQL("CREATE TABLE jobs(id TEXT PRIMARY KEY, revision INTEGER NOT NULL, phase TEXT NOT NULL, deferred INTEGER NOT NULL, zone TEXT NOT NULL, batch_id TEXT, source_key TEXT UNIQUE, payload BLOB NOT NULL)")
@@ -28,12 +28,15 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
             db.execSQL("CREATE TABLE groups_table(id TEXT PRIMARY KEY,payload BLOB NOT NULL)")
             db.execSQL("CREATE TABLE controls(key TEXT PRIMARY KEY,value INTEGER NOT NULL)")
             db.execSQL("INSERT INTO controls VALUES('paused',0)")
+            createProtectionSchema(db)
         }
-        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { error("Unsupported archive database upgrade") }
+        override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            require(oldVersion==1 && newVersion==2);createProtectionSchema(db)
+        }
         override fun onOpen(db: SQLiteDatabase) {
-            val hasPayloads = db.rawQuery("SELECT 1 FROM jobs UNION ALL SELECT 1 FROM batches UNION ALL SELECT 1 FROM groups_table LIMIT 1", null).use { it.moveToFirst() }
+            val hasPayloads = db.rawQuery("SELECT 1 FROM jobs UNION ALL SELECT 1 FROM batches UNION ALL SELECT 1 FROM groups_table UNION ALL SELECT 1 FROM protection LIMIT 1", null).use { it.moveToFirst() }
             if (hasPayloads) cipher.requireExisting()
-            val hasIndex = db.rawQuery("SELECT 1 FROM jobs WHERE source_key IS NOT NULL LIMIT 1", null).use { it.moveToFirst() }
+            val hasIndex = db.rawQuery("SELECT 1 FROM jobs WHERE source_key IS NOT NULL OR source_lookup IS NOT NULL LIMIT 1", null).use { it.moveToFirst() }
             if (hasIndex) cipher.requireExistingIndex()
         }
     }.apply { check(directory.isDirectory || directory.mkdirs()); setWriteAheadLoggingEnabled(true) }
@@ -63,6 +66,9 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         jobs.map { job ->
             require(job.zone == OriginalZone.COLD && job.sourceStamp != null)
             val stamp = job.sourceStamp!!
+            val known=forSources(listOf(job.source)).filter{it.zone==OriginalZone.COLD && it.sourceStamp==stamp}
+                .maxWithOrNull(compareBy<ArchiveJob>{it.phase==ArchivePhase.VERIFIED}.thenBy{it.createdAt})
+            if(known!=null)return@map known.id
             val key = cipher.index("selected:${job.source}:${stamp.epoch}:${stamp.generation}:${stamp.modifiedSeconds}:${stamp.bytes}")
             val exists = db.rawQuery("SELECT id FROM jobs WHERE source_key=?", arrayOf(key)).use { if(it.moveToFirst())it.getString(0)else null }
             if (exists==null){putJob(job, key);job.id}else exists
@@ -79,6 +85,7 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
             put("id", next.id); put("revision", next.revision); put("phase", next.phase.name); put("deferred", if (next.deferred) 1 else 0)
             put("zone", next.zone.name); put("batch_id", next.batchId); put("payload", payload)
             if (sourceKey != null) put("source_key", sourceKey)
+            put("source_lookup",cipher.index("source:${job.source}"))
         }
         if (exists == null) db.insertOrThrow("jobs", null, values)
         else check(db.update("jobs", values, "id=? AND revision=?", arrayOf(job.id, job.revision.toString())) == 1)
@@ -97,6 +104,44 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
                 phases[p] = (phases[p] ?: 0) + n; if (c.getInt(1) != 0) deferred += n; if (c.getString(2) == OriginalZone.GALLERY.name) gallery += n }
         }
         ArchiveCounts(phases, deferred, gallery)
+    }
+    /** Backfill old rows without replacing payloads, revisions or deduplication keys. */
+    fun indexSources() = transaction {
+        val ids=db.rawQuery("SELECT id FROM jobs WHERE source_lookup IS NULL",null).use{c->buildList{while(c.moveToNext())add(c.getString(0))}}
+        ids.forEach{id->val job=load(id);db.execSQL("UPDATE jobs SET source_lookup=? WHERE id=?",arrayOf(cipher.index("source:${job.source}"),id))}
+    }
+    fun forSources(sources:List<String>):List<ArchiveJob> = synchronized(guard) {
+        sources.distinct().chunked(200).flatMap { chunk ->
+            if(chunk.isEmpty())emptyList() else db.rawQuery("SELECT id FROM jobs WHERE source_lookup IN (${chunk.joinToString(","){"?"}})",
+                chunk.map{cipher.index("source:$it")}.toTypedArray()).use{c->buildList{while(c.moveToNext())add(load(c.getString(0)))}}
+        }
+    }
+    fun protection(id:String):ProtectionPlan? = synchronized(guard) {
+        db.rawQuery("SELECT revision,stage,payload FROM protection WHERE cold_id=?",arrayOf(id)).use { c ->
+            if(!c.moveToFirst())return@synchronized null
+            val plain=cipher.open("protection:$id:${c.getLong(0)}",c.getBlob(2))
+            try{Json.decodeFromString(ProtectionPlan.serializer(),plain.toString(Charsets.UTF_8)).also{
+                it.validate();require(it.coldId==id && it.revision==c.getLong(0) && it.stage.name==c.getString(1))
+            }}finally{plain.fill(0)}
+        }
+    }
+    fun protections():List<ProtectionPlan> = synchronized(guard) {
+        db.rawQuery("SELECT cold_id FROM protection ORDER BY rowid DESC",null).use{c->buildList{while(c.moveToNext())add(protection(c.getString(0))!!)}}
+    }
+    fun saveProtection(plan:ProtectionPlan) = transaction {
+        plan.validate();val old=protection(plan.coldId)
+        require(if(old==null)plan.revision==0L else old.revision==plan.revision)
+        val next=plan.copy(revision=plan.revision+1);val plain=Json.encodeToString(ProtectionPlan.serializer(),next).toByteArray()
+        val sealed=try{cipher.seal("protection:${plan.coldId}:${next.revision}",plain)}finally{plain.fill(0)}
+        val values=ContentValues().apply{put("cold_id",next.coldId);put("revision",next.revision);put("stage",next.stage.name);put("payload",sealed)}
+        if(old==null)db.insertOrThrow("protection",null,values) else check(db.update("protection",values,"cold_id=? AND revision=?",arrayOf(plan.coldId,plan.revision.toString()))==1)
+    }
+    fun ensureWorking(id:String):ArchiveJob = transaction {
+        val plan=protection(id)!!
+        plan.workingId?.let{return@transaction load(it)}
+        val group=createGallery(listOf(id),"Галерея",streamVideo=load(id).mime.startsWith("video/"))
+        saveProtection(plan.copy(workingId=group.galleryIds.single(),stage=ProtectionStage.WORKING_COPY))
+        load(group.galleryIds.single())
     }
     fun next(): ArchiveJob? = synchronized(guard) {
         db.rawQuery("SELECT id FROM jobs WHERE deferred=0 AND phase IN ('QUEUED','PREPARED','UPLOAD_UNCERTAIN') ORDER BY CASE phase WHEN 'UPLOAD_UNCERTAIN' THEN 0 WHEN 'PREPARED' THEN 1 ELSE 2 END,rowid LIMIT 1", null)
@@ -186,5 +231,12 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         // Legacy encrypted records remain untouched for recovery and rollback.
     } }
     override fun close() { helper.close() }
-    companion object { val guard = Any(); fun randomId() = UUID.randomUUID().toString().replace("-", "") }
+    companion object {
+        private fun createProtectionSchema(db:SQLiteDatabase) {
+            db.execSQL("ALTER TABLE jobs ADD COLUMN source_lookup TEXT")
+            db.execSQL("CREATE INDEX jobs_source_lookup ON jobs(source_lookup)")
+            db.execSQL("CREATE TABLE protection(cold_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,stage TEXT NOT NULL,payload BLOB NOT NULL,FOREIGN KEY(cold_id) REFERENCES jobs(id))")
+        }
+        val guard = Any(); fun randomId() = UUID.randomUUID().toString().replace("-", "")
+    }
 }

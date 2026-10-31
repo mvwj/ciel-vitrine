@@ -31,6 +31,7 @@ data class MediaItem(
     val modifiedSeconds: Long = 0, val generation: Long? = null,
     val binding: String? = null,
     val cloudId: String? = null, val performanceId: String? = null,
+    val previewId:String?=null,
 ) { val isVideo get() = mime.startsWith("video/") }
 
 enum class MediaAccess { NONE, SELECTED, FULL, MIXED }
@@ -172,7 +173,10 @@ class GalleryModel(app: Application) : AndroidViewModel(app) {
 
     private suspend fun verifiedBinding(item: MediaItem): String? {
         val binding = withContext(Dispatchers.IO) {
-            runCatching { currentMediaBinding(getApplication<Application>(), item.uri) }.getOrNull()
+            runCatching {
+                if(item.cloudId!=null && item.previewId!=null)ArchiveStore(getApplication()).use{protectedBinding(it,item)}
+                else currentMediaBinding(getApplication<Application>(), item.uri)
+            }.getOrNull()
         }
         if (binding == null || binding != item.binding) {
             message(if (Build.VERSION.SDK_INT < 30) "Для безопасной привязки фото к альбомам нужен Android 11 или новее."

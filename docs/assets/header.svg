@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="340" viewBox="0 0 1280 340" role="img" aria-labelledby="title desc">
+  <title id="title">Ciel Vitrine — your originals, preserved</title>
+  <desc id="desc">A mint cloud above an abstract gallery on a dark background. Android gallery and verifiable cloud originals.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#11181c"/><stop offset="1" stop-color="#1c3539"/></linearGradient>
+    <linearGradient id="tile" x2="1" y2="1"><stop stop-color="#a1cec3"/><stop offset="1" stop-color="#476c81"/></linearGradient>
+  </defs>
+  <rect width="1280" height="340" rx="24" fill="url(#bg)"/>
+  <g fill="none" stroke="#a1cec3" opacity=".1"><circle cx="1100" cy="165" r="130"/><circle cx="1100" cy="165" r="195"/><circle cx="1100" cy="165" r="260"/></g>
+  <text x="64" y="70" fill="#a1cec3" font-family="Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="4">ANDROID · OPEN SOURCE</text>
+  <text x="60" y="150" fill="#edf4f2" font-family="Arial, sans-serif" font-size="68" font-weight="700" letter-spacing="-2">Ciel Vitrine</text>
+  <text x="64" y="200" fill="#d0dedc" font-family="Arial, sans-serif" font-size="27">Your originals, preserved.</text>
+  <text x="64" y="266" fill="#a1cec3" font-family="Arial, sans-serif" font-size="16">VERIFIABLE COPIES</text>
+  <circle cx="256" cy="260" r="3" fill="#628b88"/>
+  <text x="277" y="266" fill="#a1cec3" font-family="Arial, sans-serif" font-size="16">INDEPENDENT RECOVERY</text>
+  <g transform="translate(904 54)">
+    <path d="M38 73c-22 0-22-35 1-35 6-27 42-29 52-6 25-6 36 30 12 40z" fill="none" stroke="#a1cec3" stroke-width="5" stroke-linejoin="round"/>
+    <path d="m56 49 13 13 25-27" fill="none" stroke="#edf4f2" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    <g transform="translate(-25 104)" fill="url(#tile)">
+      <rect width="58" height="58" rx="4"/><rect x="64" width="58" height="58" rx="4" opacity=".68"/><rect x="128" width="58" height="58" rx="4" opacity=".45"/>
+      <rect y="64" width="58" height="58" rx="4" opacity=".45"/><rect x="64" y="64" width="58" height="58" rx="4" opacity=".8"/><rect x="128" y="64" width="58" height="58" rx="4" opacity=".62"/>
+    </g>
+  </g>
+</svg>

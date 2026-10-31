@@ -1,0 +1,30 @@
+name: Bug report / Ошибка
+description: Report a reproducible problem using sanitized details.
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include personal media, tokens, keys, precise locations or unredacted logs. Security issues: use the Security tab. Можно писать по-русски."
+  - type: input
+    id: version
+    attributes:
+      label: App version or commit
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android version and media format
+      description: "For example: Android 15, JPEG, local file. Device serial and account are not needed."
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true

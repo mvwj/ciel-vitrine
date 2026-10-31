@@ -1,79 +1,132 @@
-# Небесная витрина / Ciel Vitrine
+<p align="center"><img src="docs/assets/header.svg" alt="Ciel Vitrine — your originals, preserved" width="100%" /></p>
 
-Android gallery with exact-byte originals, archive-first cloud workflow and explicitly scoped deletion. One connected provider at a time; Yandex Disk is the first integration, Google Drive follows.
+<p align="center">
+  <a href="https://github.com/mvwj/ciel-vitrine/actions/workflows/android.yml"><img src="https://github.com/mvwj/ciel-vitrine/actions/workflows/android.yml/badge.svg" alt="Android build and safety tests" /></a>
+  <a href="https://github.com/mvwj/ciel-vitrine/actions/workflows/security.yml"><img src="https://github.com/mvwj/ciel-vitrine/actions/workflows/security.yml/badge.svg" alt="Secret and privacy checks" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-a1cec3" alt="Apache-2.0" /></a>
+  <img src="https://img.shields.io/badge/Android-10%2B-a1cec3" alt="Android 10 and above" />
+  <img src="https://img.shields.io/badge/status-experimental-d4b483" alt="Experimental" />
+</p>
 
-## Current milestone: 0.1.10
+<p align="center"><b>Небесная витрина</b> · <a href="README.ru.md">По-русски</a> · <a href="docs/README.md">Documentation</a> · <a href="CONTRIBUTING.md">Contributing</a></p>
 
-R5-A improvements were integrated into the existing project on 30 October 2026, with additional recovery, cache, gesture and export fixes. Historical audit results are separate from the new validation. See [integration and remaining limits](docs/INTEGRATION_2026_10_30_RU.md).
+Ciel Vitrine is an Android gallery built around verifiable cloud originals.
+Browse a dark, day-grouped timeline, keep small local previews and open media
+from your own cloud storage. Yandex Disk is the first integration; one provider
+is connected at a time. Google Drive is planned.
 
-New cloud containers and manual exports use the neutral `.bin` extension. CVPOS3 preserves observed source dates alongside exact original bytes; CVPOS2 and POS v1 remain readable. Existing jobs retain their naming policy, including uncertain uploads. The extension does not hide the public recovery key or establish confidentiality from the provider.
+**Development preview.** Recovery, viewing and removal have different checks.
+Keep an independent backup while testing. Current work and limits are recorded
+in [the development plan](docs/DEVELOPMENT_PLAN_RU.md) and
+[validation reports](docs/README.md#validation).
 
-- Native Compose gallery: real MediaStore images/videos grouped by capture day, square thumbnails with 2 dp gutters in a dark theme, date scrollbar with haptic feedback, device folders, local albums, favorites, photo/GIF viewer and Media3 video playback. A complete metadata index supports jumps to old days; thumbnails/media remain lazy.
-- Full-screen adjacent-media pager, full-resolution local region decoding, hardware Canvas/Gainmap photo rendering and a SurfaceView video player with play/pause and seeking. Multi-selection queues exactly the chosen originals; favorites and album actions also accept selections.
-- Focal-point zoom, bounded initial photo decoding and replacement of translucent detail pixels without double compositing. Obsolete viewport batches stop between requests; generations reject late publication.
-- Large/unknown-size originals and videos use authenticated CVMP1 multipart manifests over independent CVPOS3 objects. There is no 128 MiB source admission limit; 128 MiB remains a compatibility boundary for old single-object jobs. Multipart verification and playback follow the authenticated remote manifest, not just the local upload journal.
-- Media3 consumes verified original-byte parts on demand. Quality changes preserve position, play/pause and volume. Prepared SDR renditions have separate jobs and never replace originals; unsupported HDR transformation is rejected. The default clears owned viewing cache after the last consumer closes. Interrupted ciphertext can resume within retained-cache sessions, with strict HTTP Range and complete revalidation before exposure.
-- Image thumbnails decode the current original descriptor rather than trusting MediaStore's potentially stale thumbnail cache. A bounded 16 MiB generation/binding cache checks read access even on hits; at most three thumbnail loads run concurrently.
-- Static cloud photographs use independently encrypted lossless raster tiles packed into immutable cloud objects. The viewer fetches only visible indexed HTTP ranges, requires exact 206/Content-Range/length, verifies trusted ciphertext SHA-256 and AEAD, and preserves native pixel/color/Gainmap data. No complete-original fallback runs in this photo viewing path. Full originals remain independent exact-byte archives. [Protocol and limits](docs/PARTIAL_CLOUD_VIEW_RU.md).
-- Device-private measurement histories record actual successful/failed attempts and received tile bytes. The displayed/exported report is scoped to the chosen jobs; cache reads are separate, nested stages are not summed. Recording a tile does not rebuild all histories.
-- Manual restore verifies the entire container before offering its original name/MIME in the save picker, then requires the same container SHA-256 before writing. Android 11+ favorite/album bindings include the MediaStore epoch and row insertion generation; legacy URI links stay unresolved until explicit confirmation. Old preferences are retained, unavailable members are not deleted and unreadable album data cannot be overwritten. Thumbnail/viewer state includes the binding. Android 10 can browse but cannot safely add members without an insertion generation.
-- Full/selected/mixed media access is visible. A revoked grant is never treated as deletion.
-- CVPOS3 creation and recovery through Android's document picker, with CVPOS2/POS v1 import. Exact bytes, standard AES-256-GCM, public recovery key and full non-executable recovery recipe inside the file. Source dates are captured from the actual original descriptor and carried into independent working copies. Restore authenticates the complete container in private staging before touching its destination, then rereads the written bytes. Both export and restore reject nonempty destinations and aliases of their source. Original name/MIME cannot be silently truncated. Native futimens preserves nanosecond mtime where supported and verifies it on the same descriptor; unsupported destination dates are reported. Original EXIF dates are preserved in the media bytes; unknown filesystem creation dates are not invented. Export verifies the source through a second full read. The source is never removed.
-- Media safety checks cover 14 owned fixtures and actual image/video viewers, including orientation, alpha, animation advancement, same-URI thumbnail edits and explicit decoding errors. Additional tile tests cover native Ultra HDR gainmaps, F16 pixels, partial ranges, cache and uncertain uploads. An opt-in real Yandex test passed on a generated Ultra HDR JPEG. These checks do not establish universal RAW/Live Photo support or the physical brightness of every HDR screen.
-- Conservative JVM safety prototype: complete compound resource sets, bound proof persistence, separate physical copies, transactional reservations, atomic terminal state/outbox and 60-day Trash preflight.
-- Yandex LoginSDK with the registered public Client ID, device-local AES-GCM/Android Keystore session storage and read-only identity/Disk/app-folder checks. A saved account cannot be silently rebound. Real-account sign-in was confirmed on the phone after enabling Disk information access and signing in again. Metadata GETs have a 75-second deadline per attempt and at most three attempts; PUTs and partially delivered streaming bodies are never replayed by that helper. Downloads follow at most five redirects, validate every HTTPS Yandex destination and drop OAuth authorization on a host change; the recovery reader runs only on the final successful response.
-- Offline archive-all inventory: encrypted Android SQLite payloads, transactional scan pages/cursors, source epochs/generations and exact source rereads; persistent bounded upload queue, pause/resume, account/root binding and upload without overwrite. Full cloud recovery readback compares original and container SHA-256, length, bundle identity and stable observed object identity/version. An uncertain upload is reconciled by reading, never a blind repeated PUT.
+## What it does
 
-Uploads require an unmetered network, cloud quota, bounded temporary space and a stable app-folder ID. Old size-only rejections migrate back to the multipart queue. Manual resource sets create physically separate Gallery Store containers after fresh readback of every cold member, including mixed SINGLE/MULTIPART sets. The earlier ten public JPEGs completed real Yandex Cold/Gallery roundtrips; that historical result is not a new multipart cloud benchmark. Static cloud JPEG/PNG viewing still requires a complete verified device-indexed tile pyramid. Whole-original preparation/fallback uses a 256 MiB owned viewer cache and cannot currently prepare larger photos through that path. Automatic Live Photo pairing, complete catalog recovery after reinstall, freeing original storage and destructive actions remain unavailable. Legacy SINGLE video needs an explicit working multipart copy before streaming. Native HDR playback depends on the device; HDR rendition encoding is disabled. JPEG/PNG tile preparation, real Yandex multipart performance and physical HDR quality remain separate validation tasks. JDBC stores remain JVM safety prototypes; Android archive rows do not authorize deleting originals. Public recovery keys deliberately permit the provider to read originals. Local APKs use the registered OAuth certificate; CI uses a different certificate.
+| | Behavior |
+|---|---|
+| **Gallery** | Day headers, square thumbnails with small gutters, date scrollbar and haptics, folders, favorites and local albums. |
+| **Cloud state** | Per-photo badges and queue stages distinguish local files, upload, verification, cold archive, working copy and failures. |
+| **Originals** | Exact source bytes, full readback verification, SHA-256 and recorded source dates. Preview generation does not rewrite originals. |
+| **Cloud photos** | JPEG/PNG detail is fetched as authenticated, independently encrypted visible tile ranges after preparation. |
+| **Video** | Media3 playback, seeking and multipart original reads. Prepared SDR qualities are separate derivatives. HDR depends on native device support. |
+| **Recovery** | Self-contained containers and independent Python/JVM decoders, with compatibility for older formats. |
 
-## Design
+## Archive first
 
-- [Partial encrypted cloud photo viewing](docs/PARTIAL_CLOUD_VIEW_RU.md)
+```mermaid
+flowchart LR
+    A[Phone original] --> B[Cold Archive]
+    B --> C[Full readback verification]
+    C --> D[Separate Gallery Store copy]
+    D --> E[Verify and prepare cloud viewing]
+    E --> F[Keep phone original]
+    E --> G[Fresh checks + Android confirmation]
+    G --> H[Local preview + cloud originals]
+```
 
-- [Accepted requirements, findings and development plan](docs/DEVELOPMENT_PLAN_RU.md)
-- [Yandex OAuth setup](docs/YANDEX_SETUP_RU.md)
-- [Milestone validation](docs/VALIDATION_0_1_RU.md)
-- [Yandex sign-in milestone validation](docs/VALIDATION_0_1_1_RU.md)
-- [Archive milestone validation](docs/VALIDATION_0_1_2_RU.md)
-- [Mass queue and working originals validation](docs/VALIDATION_0_1_3_RU.md)
-- [Neutral container names and compatibility validation](docs/VALIDATION_0_1_4_RU.md)
-- [CVPOS2 format and recovery](docs/CVPOS2_SPEC.md)
-- [CVPOS3 original dates and recovery](docs/CVPOS3_SPEC.md)
-- [Ten-photograph and date validation](docs/VALIDATION_0_1_5_RU.md)
-- [Daily timeline and real Yandex validation](docs/VALIDATION_0_1_6_RU.md)
-- [Original safety, native metadata and speed validation](docs/VALIDATION_0_1_7_RU.md)
-- [Dark theme, gutters and verified restore/album bindings](docs/VALIDATION_0_1_8_RU.md)
-- [Partial network viewing, HDR pixels and selected-file measurements](docs/VALIDATION_0_1_9_RU.md)
-- [v26 audit](gallery_architecture_v26_audit_ru.md)
-- [v29 working specification](docs/SPEC_V29.md)
-- [Experimental POS v1 byte layout](docs/POS_V1_SPEC.md)
-- [Offline reference decoder](pos-reference-decoder/python/ciel_pos_decoder.py)
+Selected uploads offer **keep on device** and **free device space**. Both keep
+the cold archive separate from the working original. A completed upload or a
+thumbnail alone never authorizes local removal. Workers cannot delete local
+originals; Android requests the user's explicit confirmation after fresh checks.
 
-Accepted user requirements determine scope. Historical notes and specification prose describe intended behavior, not proof that code implements it.
+Local removal currently requires Android 11+, a declared complete resource set,
+two verified copies and a supported cloud viewing path. It is permanent local
+removal, not a 60-day device trash. Android cannot lock a photo against an
+external edit while its confirmation dialog is open. See
+[the complete workflow and limits](docs/CLOUD_STATUS_AND_LOCAL_RELEASE_RU.md).
 
-## Build and verify
+## Privacy model
 
-JDK 17+, Android SDK 36, Build Tools 36.0.0, NDK 28.2.13676358 and CMake 3.22.1. Configure SDK in ignored `local.properties` or `ANDROID_HOME`. Shared modules use a JDK 17 toolchain.
+**The recovery key is included in each original container.** AES-GCM protects
+the container structure, but a cloud provider or anyone with that file can
+recover its original bytes and EXIF/GPS. This design favors recovery without a
+separate key; it does not provide secrecy from the provider. A `.bin` extension
+does not change that property.
 
-```text
+OAuth tokens and device catalogs use separate Android Keystore protection.
+Your OAuth registration, signing keys, sessions, media and local settings do
+not belong in Git. See [security and reporting](SECURITY.md).
+
+## Build
+
+Requires JDK 17+, Android SDK 36, Build Tools 36.0.0, NDK 28.2.13676358 and
+CMake 3.22.1. Configure `ANDROID_HOME` or an ignored `local.properties`.
+
+```sh
+git clone https://github.com/mvwj/ciel-vitrine.git
+cd ciel-vitrine
+python -m pip install -r requirements-recovery.txt
 ./gradlew test :app:assembleDebug :app:lintDebug
 python scripts/test_pos_fixtures.py
 python scripts/test_pos2_fixtures.py
 ```
 
-Install `requirements-recovery.txt` into a Python environment first. Set `POS2_PYTHON` to that interpreter if it is not the default `python`; Windows helper also detects `.venv/Scripts/python.exe`. Tests encode with Kotlin and independent Python and verify both directions, including actual original fixtures. If fixtures were removed while test results stayed cached, run `./gradlew :pos-format:test --rerun-tasks` first.
+Windows: use `gradlew.bat`, or [the local build helper](scripts/build-local.ps1).
+`POS2_PYTHON` can select a Python environment with the recovery requirements.
+The APK is generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`. Debug signing is for development only.
+The default public build works as a local gallery. To enable Yandex sign-in,
+copy `oauth.properties.example` to ignored `oauth.properties` and configure
+your own public Client ID and signing certificate using
+[the setup guide](docs/YANDEX_SETUP_RU.md). A client secret is never needed in
+the Android app. CI builds use an unregistered placeholder and a separate debug
+certificate, so they are not preconfigured for the maintainer's account.
 
-Android instrumentation requires `./scripts/prepare-photo-corpus.ps1` and `python scripts/prepare-safety-corpus.py` before building `:app:assembleDebugAndroidTest`. The first downloads ten pinned public JPEGs and verifies hashes; the second needs `requirements-safety.txt` and FFmpeg with x264/x265/AV1 to create 14 owned media fixtures. The full suite runs on an isolated emulator. Real Yandex tests require a connected account and an explicit `-e real_cloud true` argument; they leave their own verified test containers in the cloud. Never run the full permission/inventory/session test suite against a personal phone library. See [0.1.7 validation](docs/VALIDATION_0_1_7_RU.md) for measured results, safe phone classes and limits.
+Android instrumentation uses generated media and pinned public samples. Run
+the complete suite on an **isolated emulator**, following
+[the testing guide](CONTRIBUTING.md). Real-cloud tests require explicit opt-in.
 
-For Windows hosts affected by Java temporary socket path virtualization, use `./scripts/build-local.ps1`; it applies the [OpenJDK process-local workaround](https://mail.openjdk.org/pipermail/nio-dev/2023-March/013297.html). Compose BOM is pinned to 2025.10.01 for SDK 36; the September 2026 BOM requires SDK 37.
+## Recover without the app
 
-## Offline recovery
-
-```text
-python pos-reference-decoder/python/ciel_pos_decoder.py original.pos --output recovered-original.bin
-python pos-reference-decoder/python/ciel_pos2_decoder.py original.bin --output recovered-original.bin
+```sh
+python pos-reference-decoder/python/ciel_pos2_decoder.py original.bin --output recovered.bin
 ```
 
-The independent JVM distribution (`./gradlew :pos-reference-decoder:installDist`) supports all three formats using Java 17+. CVPOS2/3 recovery checks bounded framing, GCM tags, prefix/original hashes, the mandatory final record and EOF. Public keys and hashes establish internal consistency; trusted identity requires the independently captured original passport. CVPOS2/3 embed the full recipe. Legacy POS v1 still needs its external specification and decoder.
+This supports CVPOS2/3. A [separate decoder](pos-reference-decoder/python/ciel_pos_decoder.py)
+supports legacy POS v1; `:pos-reference-decoder:installDist` builds the JVM tools.
+Recovery verifies framing, authentication tags, hashes, the final record and EOF.
+An independently stored original hash establishes identity beyond a container's
+internal consistency. [Format specification](docs/CVPOS3_SPEC.md).
+
+## Current boundaries
+
+- Automatic Live Photo/sidecar pairing and complete catalog recovery after
+  reinstall are unfinished. Unsupported formats retain their local originals.
+- Two copies on the same provider do not protect against losing that account.
+  Cloud deletion and a 60-day cloud trash are not available in the app.
+- Multipart originals have no 128 MiB admission cap. Whole-photo tile
+  preparation currently uses a 256 MiB original cache; this is a separate limit.
+- Native HDR rendering needs compatible Android hardware. HDR quality
+  transcoding is disabled; reduced qualities are prepared SDR derivatives.
+- Test results cover their stated fixtures and fault scenarios. They are not a
+  guarantee against every possible failure or an independent security audit.
+
+## Explore the project
+
+- [Architecture and module map](docs/ARCHITECTURE.md)
+- [Documentation and validation index](docs/README.md)
+- [Partial cloud photo protocol](docs/PARTIAL_CLOUD_VIEW_RU.md)
+- [Video and large originals](docs/VIDEO_AND_LARGE_ORIGINALS_RU.md)
+- [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Third-party materials](THIRD_PARTY_NOTICES.md)
+
+Licensed under [Apache-2.0](LICENSE). Copyright 2026 Ciel Vitrine contributors.

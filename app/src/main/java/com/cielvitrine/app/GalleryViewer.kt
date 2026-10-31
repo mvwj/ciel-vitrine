@@ -60,7 +60,7 @@ internal fun GalleryViewer(items:List<MediaItem>,initial:MediaItem,close:()->Uni
             }
             if(!current.isVideo)Row(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha=.55f)).navigationBarsPadding().padding(start=16.dp),verticalAlignment=Alignment.CenterVertically) {
                 Text(current.name,Modifier.weight(1f),maxLines=1,color=Color.White,style=MaterialTheme.typography.bodySmall)
-                if(current.cloudId==null) {
+                if(current.cloudId==null || current.previewId!=null) {
                     IconButton(onClick={favorite(current)}){Icon(if(isFavorite(current))Icons.Outlined.Favorite else Icons.Outlined.FavoriteBorder,"Избранное",tint=Color.White)}
                     IconButton(onClick={album(current)}){Icon(Icons.Outlined.CreateNewFolder,"Добавить в альбом",tint=Color.White)}
                 }
