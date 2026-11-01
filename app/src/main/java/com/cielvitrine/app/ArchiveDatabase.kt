@@ -41,6 +41,9 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         }
     }.apply { check(directory.isDirectory || directory.mkdirs()); setWriteAheadLoggingEnabled(true) }
     private val db get() = helper.writableDatabase
+    private var sourceIndexReady=false
+    private val sourceLookupCache=java.util.concurrent.ConcurrentHashMap<String,String>()
+    private fun sourceLookup(source:String)=sourceLookupCache.computeIfAbsent(source){"v2:${cipher.fastIndex("source:$it")}"}
 
     private fun <T> transaction(block: () -> T): T = synchronized(guard) {
         db.beginTransaction()
@@ -85,7 +88,7 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
             put("id", next.id); put("revision", next.revision); put("phase", next.phase.name); put("deferred", if (next.deferred) 1 else 0)
             put("zone", next.zone.name); put("batch_id", next.batchId); put("payload", payload)
             if (sourceKey != null) put("source_key", sourceKey)
-            put("source_lookup",cipher.index("source:${job.source}"))
+            put("source_lookup",sourceLookup(job.source))
         }
         if (exists == null) db.insertOrThrow("jobs", null, values)
         else check(db.update("jobs", values, "id=? AND revision=?", arrayOf(job.id, job.revision.toString())) == 1)
@@ -107,13 +110,26 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
     }
     /** Backfill old rows without replacing payloads, revisions or deduplication keys. */
     fun indexSources() = transaction {
-        val ids=db.rawQuery("SELECT id FROM jobs WHERE source_lookup IS NULL",null).use{c->buildList{while(c.moveToNext())add(c.getString(0))}}
-        ids.forEach{id->val job=load(id);db.execSQL("UPDATE jobs SET source_lookup=? WHERE id=?",arrayOf(cipher.index("source:${job.source}"),id))}
+        val ids=db.rawQuery("SELECT id FROM jobs WHERE source_lookup IS NULL OR source_lookup NOT LIKE 'v2:%'",null).use{c->buildList{while(c.moveToNext())add(c.getString(0))}}
+        ids.forEach{id->val job=load(id);db.execSQL("UPDATE jobs SET source_lookup=? WHERE id=?",arrayOf(sourceLookup(job.source),id))}
+        sourceIndexReady=true
     }
-    fun forSources(sources:List<String>):List<ArchiveJob> = synchronized(guard) {
-        sources.distinct().chunked(200).flatMap { chunk ->
-            if(chunk.isEmpty())emptyList() else db.rawQuery("SELECT id FROM jobs WHERE source_lookup IN (${chunk.joinToString(","){"?"}})",
-                chunk.map{cipher.index("source:$it")}.toTypedArray()).use{c->buildList{while(c.moveToNext())add(load(c.getString(0)))}}
+    fun forSources(sources:List<String>,checkCancelled:()->Unit={}):List<ArchiveJob> {
+        val stored=synchronized(guard){
+            if(!sourceIndexReady)indexSources()
+            db.rawQuery("SELECT DISTINCT source_lookup FROM jobs WHERE source_lookup IS NOT NULL",null)
+                .use{c->buildSet{while(c.moveToNext())add(c.getString(0))}}
+        }
+        if(stored.isEmpty())return emptyList()
+        return sources.distinct().chunked(200).flatMap { chunk ->
+            checkCancelled()
+            val keys=chunk.map{checkCancelled();sourceLookup(it)}.filter{it in stored}.toTypedArray()
+            if(keys.isEmpty())return@flatMap emptyList()
+            synchronized(guard) {
+                checkCancelled()
+                db.rawQuery("SELECT id FROM jobs WHERE source_lookup IN (${keys.joinToString(","){"?"}})",keys)
+                    .use{c->buildList{while(c.moveToNext()){checkCancelled();add(load(c.getString(0)))}}}
+            }
         }
     }
     fun protection(id:String):ProtectionPlan? = synchronized(guard) {
@@ -144,20 +160,24 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         load(group.galleryIds.single())
     }
     fun next(): ArchiveJob? = synchronized(guard) {
-        db.rawQuery("SELECT id FROM jobs WHERE deferred=0 AND phase IN ('QUEUED','PREPARED','UPLOAD_UNCERTAIN') ORDER BY CASE phase WHEN 'UPLOAD_UNCERTAIN' THEN 0 WHEN 'PREPARED' THEN 1 ELSE 2 END,rowid LIMIT 1", null)
+        db.rawQuery("SELECT id FROM jobs WHERE deferred=0 AND phase IN ('QUEUED','PREPARED','UPLOAD_UNCERTAIN') ORDER BY CASE phase WHEN 'UPLOAD_UNCERTAIN' THEN 0 WHEN 'PREPARED' THEN 1 ELSE 2 END,CASE WHEN rowid>COALESCE((SELECT value FROM controls WHERE key='queue-cursor'),0) THEN 0 ELSE 1 END,rowid LIMIT 1", null)
             .use { c -> if (c.moveToFirst()) load(c.getString(0)) else null }
+    }
+    /** Only a completed/interrupted engine step advances fairness. Status reads never rotate work. */
+    fun yieldAfterStep(id:String)=synchronized(guard) {
+        db.execSQL("INSERT OR REPLACE INTO controls(key,value) SELECT 'queue-cursor',rowid FROM jobs WHERE id=?",arrayOf(id))
     }
     fun upgradeSizeOnlyRows() { transaction {
         val ids = db.rawQuery("SELECT id FROM jobs WHERE phase='UNSUPPORTED_SIZE'",null).use { c -> buildList { while(c.moveToNext())add(c.getString(0)) } }
         ids.forEach { id -> val job=load(id);require(job.proof==null)
-            putJob(job.copy(phase=ArchivePhase.QUEUED,deferred=false,transport=OriginalTransport.MULTIPART,containerExtension=ContainerExtension.BIN,notice="Загрузка частями. Исходник сохранён.")) }
+            putJob(job.copy(phase=ArchivePhase.QUEUED,deferred=false,transport=OriginalTransport.MULTIPART,containerExtension=ContainerExtension.CV2,notice="Загрузка частями. Исходник сохранён.")) }
     } }
     fun setPaused(paused: Boolean) { synchronized(guard) { db.execSQL("UPDATE controls SET value=? WHERE key='paused'", arrayOf(if (paused) 1 else 0)) } }
     fun paused(): Boolean = synchronized(guard) { db.rawQuery("SELECT value FROM controls WHERE key='paused'", null).use { c -> check(c.moveToFirst()); c.getInt(0) != 0 } }
     fun resume(id: String) { val job = load(id); require(job.phase != ArchivePhase.VERIFIED)
         save(job.copy(deferred = false, notice = null, phase = if (job.phase in setOf(ArchivePhase.SOURCE_ERROR, ArchivePhase.UNSUPPORTED_SIZE)) ArchivePhase.QUEUED else job.phase,
             transport = if(job.phase == ArchivePhase.UNSUPPORTED_SIZE) OriginalTransport.MULTIPART else job.transport,
-            containerExtension = if(job.phase == ArchivePhase.UNSUPPORTED_SIZE) ContainerExtension.BIN else job.containerExtension)) }
+            containerExtension = if(job.phase == ArchivePhase.UNSUPPORTED_SIZE) ContainerExtension.CV2 else job.containerExtension)) }
 
     fun createBatch(batch: ArchiveBatch) { transaction { putBatch(batch) } }
     fun batch(id: String): ArchiveBatch = synchronized(guard) {
@@ -217,7 +237,7 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         val payload = try { cipher.seal("group:${group.id}", bytes) } finally { bytes.fill(0) }
         db.insertOrThrow("groups_table", null, ContentValues().apply { put("id", group.id); put("payload", payload) })
         for ((i, cold) in members.withIndex()) putJob(ArchiveJob(galleryIds[i], cold.uid, cold.rootId, cold.source, cold.name, cold.mime,
-            cold.proof!!.originalBytes, zone = OriginalZone.GALLERY, groupId = group.id, coldId = cold.id, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN, transport = if(streamVideo) OriginalTransport.MULTIPART else cold.transport))
+            cold.proof!!.originalBytes, zone = OriginalZone.GALLERY, groupId = group.id, coldId = cold.id, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.CV2, transport = if(streamVideo) OriginalTransport.MULTIPART else cold.transport))
         group
     }
     fun importLegacy(legacy: LegacyArchiveStore) { transaction {

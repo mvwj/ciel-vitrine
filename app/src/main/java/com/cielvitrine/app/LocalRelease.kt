@@ -61,7 +61,8 @@ internal class LocalRelease(private val context:Context,
                 val cold=store.load(plan.coldId);MediaInventory(context).requireUnchanged(cold)
                 require(currentMediaBinding(context,Uri.parse(cold.source))==plan.binding)
             }
-            cloud.requireAccount(account.uid!!,account.rootId!!)
+            if(cloud is YandexArchiveCloud)cloud.requireFreshAccount(account.uid!!,account.rootId!!)
+            else cloud.requireAccount(account.uid!!,account.rootId!!)
             val request=MediaStore.createDeleteRequest(context.contentResolver,uris)
             plans.forEach { plan -> store.saveProtection(store.protection(plan.coldId)!!.copy(stage=ProtectionStage.ANDROID_REQUESTED,checkedAt=System.currentTimeMillis(),notice=null)) }
             request

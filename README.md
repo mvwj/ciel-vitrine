@@ -60,7 +60,7 @@ external edit while its confirmation dialog is open. See
 **The recovery key is included in each original container.** AES-GCM protects
 the container structure, but a cloud provider or anyone with that file can
 recover its original bytes and EXIF/GPS. This design favors recovery without a
-separate key; it does not provide secrecy from the provider. A `.bin` extension
+separate key; it does not provide secrecy from the provider. A `.bin` or `.cv2` extension
 does not change that property.
 
 OAuth tokens and device catalogs use separate Android Keystore protection.

@@ -28,6 +28,20 @@ class LocalReleaseAndroidTest {
     @get:Rule val compose=createAndroidComposeRule<androidx.activity.ComponentActivity>()
     private val instrument get()=InstrumentationRegistry.getInstrumentation()
     private val context get()=instrument.targetContext
+    @org.junit.Before fun allowFixtureInventory() {
+        // Full suite runs on an isolated emulator; do not depend on permissions left by earlier tests.
+        val permissions=if(android.os.Build.VERSION.SDK_INT>=33)listOf(android.Manifest.permission.READ_MEDIA_IMAGES,android.Manifest.permission.READ_MEDIA_VIDEO)
+            else listOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+        permissions.forEach{instrument.uiAutomation.grantRuntimePermission(context.packageName,it)}
+        compose.runOnUiThread {
+            compose.activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            context.getSystemService(android.app.KeyguardManager::class.java).requestDismissKeyguard(compose.activity,null)
+        }
+        instrument.uiAutomation.serviceInfo=instrument.uiAutomation.serviceInfo.apply {
+            flags=flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS or
+                android.accessibilityservice.AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+        }
+    }
     private inner class Fixture:AutoCloseable {
         val id=ArchiveStore.randomId();val directory=File(context.noBackupFilesDir,"release-test-$id").apply{mkdir()}
         val alias="ciel.tests.release.$id"
@@ -118,25 +132,13 @@ class LocalReleaseAndroidTest {
                 assertTrue(f.originalPresent());compose.onNodeWithText("Release fixture").performClick()
             }
             fun chooseSystem(allow:Boolean) {
-            val deadline=System.nanoTime()+15_000_000_000L;var clicked=false
-            while(!clicked && System.nanoTime()<deadline) {
-                val root=instrument.uiAutomation.rootInActiveWindow
-                fun positive(node:android.view.accessibility.AccessibilityNodeInfo?):android.view.accessibility.AccessibilityNodeInfo? {
-                    if(node==null)return null
-                    val text=node.text?.toString().orEmpty()
-                    val id=node.viewIdResourceName.orEmpty()
-                    val match=if(allow)id=="android:id/button1" || id.endsWith(":id/button_positive") || text in setOf("Allow","Delete")
-                        else id=="android:id/button2" || id.endsWith(":id/button_negative") || text in setOf("Don't allow","Don’t allow","Deny","Cancel")
-                    if(node.isClickable && node.isEnabled && match)return node
-                    for(i in 0 until node.childCount)positive(node.getChild(i))?.let{return it}
-                    return null
-                }
-                val button=positive(root)
-                val pkg=root?.packageName?.toString().orEmpty()
-                if(button!=null && (pkg.contains("media") || pkg.contains("permissioncontroller") || pkg=="android"))clicked=button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)
-                if(!clicked)Thread.sleep(100)
-            }
-            assertTrue("System fixture-only consent button was not found",clicked)
+                val device=androidx.test.uiautomator.UiDevice.getInstance(instrument)
+                val systemPackages=java.util.regex.Pattern.compile("com\\.(?:google\\.)?android\\.(?:providers\\.media(?:\\.module)?|permissioncontroller)|android")
+                val selector=androidx.test.uiautomator.By.res("android",if(allow)"button1" else "button2").pkg(systemPackages)
+                device.waitForIdle()
+                val button=device.wait(androidx.test.uiautomator.Until.findObject(selector),20_000)
+                assertNotNull("System fixture-only consent button missing; result=${response.get()}",button)
+                button!!.click()
             }
             prepareAndOpen();chooseSystem(false)
             compose.waitUntil(10000){response.get()!=Int.MIN_VALUE}

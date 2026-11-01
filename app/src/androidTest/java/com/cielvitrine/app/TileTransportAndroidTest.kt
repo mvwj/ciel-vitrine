@@ -24,6 +24,14 @@ class TileTransportAndroidTest {
     private fun fixture():Bitmap=Bitmap.createBitmap(128,96,Bitmap.Config.ARGB_8888).apply {
         setPixels(IntArray(128*96){i->((i%256) shl 24) or ((i*17)%0x1000000)},0,128,0,0,128,96)
     }
+    @Test fun packPathsRetainLegacySuffixAndPersistNewSuffixBeforeUpload() {
+        val old=TilePack("a".repeat(32),100,"b".repeat(64),attempted=true)
+        assertTrue(old.path.endsWith(".bin"));assertFalse(old.json().has("extension"))
+        assertEquals(old,TilePack.parse(old.json()))
+        val current=old.copy(id="c".repeat(32),extension=ContainerExtension.CV2)
+        assertTrue(current.path.endsWith(".cv2"));assertEquals(current,TilePack.parse(current.json()))
+        assertFails{TilePack.parse(current.json().put("extension","../photo.jpg"))}
+    }
     @Test fun rasterPreservesPixelsAlphaColorAndRejectsInvalidOrTrailingCompression() {
         val original=fixture();val packed=TileRaster.encode(original);val decoded=TileRaster.decode(packed)
         try {assertArrayEquals(bytes(original),bytes(decoded));assertEquals(original.colorSpace,decoded.colorSpace)
@@ -70,6 +78,19 @@ class TileTransportAndroidTest {
         val row=(0 until metrics.length()).map{metrics.getJSONObject(it)}.single{it.getString("id")==job.id}
         assertEquals(2,row.getJSONObject("totals").getJSONObject("tile_download").getInt("success"))
         assertTrue(row.getJSONObject("totals").getJSONObject("tile_cache").getInt("success")>=1)
+        }
+    }
+    @Test fun adjacentRequestedTilesShareOneExactRangeAndCorruptionIsRejectedBeforeDisplay()=withPrepared { _,job,store,cloud,alias,scope ->
+        val catalog=store.load(job.id)!!
+        val entries=catalog.tiles.filter{it.coordinate.sample==1}.sortedBy{it.offset}.take(2)
+        assertEquals(2,entries.size);assertEquals(entries[0].pack,entries[1].pack)
+        assertEquals(entries[0].offset+entries[0].length,entries[1].offset)
+        TileReader(context,catalog,cloud,File(scope,"cache"),alias).use { reader ->
+            cloud.corrupt=true;assertFails{reader.load(entries)}
+            cloud.corrupt=false;cloud.ranges.clear()
+            reader.load(entries).forEach{it.close()}
+            assertEquals(listOf(entries.first().offset to entries.sumOf{it.length}),cloud.ranges)
+            reader.load(entries).forEach{it.close()};assertEquals(1,cloud.ranges.size)
         }
     }
     @Test fun corruptedRangesAndChangedRemoteIdentityNeverProduceADisplayedTile()=withPrepared { _,job,store,cloud,alias,scope ->

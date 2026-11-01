@@ -56,7 +56,7 @@ internal class VideoViewStore(private val context: Context, private val original
         load(quality)?.let{old->return@synchronized if(old.job.deferred)update(quality){it.copy(
             generation=Math.addExact(it.generation,1),job=it.job.copy(deferred=false,notice=null))}else old}
         val id=ArchiveStore.randomId();val job=ArchiveJob(id,original.uid,original.rootId,Uri.fromFile(output(id)).toString(),"view-${quality.edge}.mp4","video/mp4",null,
-            zone=OriginalZone.VIEW,createdAt=System.currentTimeMillis(),containerExtension=ContainerExtension.BIN,transport=OriginalTransport.MULTIPART)
+            zone=OriginalZone.VIEW,createdAt=System.currentTimeMillis(),containerExtension=ContainerExtension.CV2,transport=OriginalTransport.MULTIPART)
         VideoViewRequest(original.id,original.proof!!.originalSha256,quality,job).also{save(it)}
     }
     fun active(quality: VideoQuality, generation: Long): Boolean = synchronized(guard) {
@@ -191,7 +191,7 @@ class VideoViewWorker(context:Context,params:WorkerParameters):CoroutineWorker(c
             ViewerRuntime.source(Uri.fromFile(output).toString()).use {
                 val saved=YandexSessionStore(context).load() ?: error("Sign-in required")
                 require(saved.uid==original.uid && saved.appRootId==original.rootId)
-                val cloud=YandexArchiveCloud(context,saved);val jobs=store.journal(quality,expected)
+                val cloud=YandexArchiveCloud(context,saved,timingId={original.id},timingPrefix="rendition_");val jobs=store.journal(quality,expected)
                 val deadline=System.nanoTime()+180_000_000_000L
                 while(!stopping() && System.nanoTime()<deadline) {
                     val job=jobs.load(request.job.id)

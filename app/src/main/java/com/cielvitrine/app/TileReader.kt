@@ -46,6 +46,7 @@ internal class TileReader(private val context:Context,val catalog:TileCatalog,
     private val cache=ViewerRuntime.cache(context)
     private val held=mutableListOf<RenderTile>()
     private val touched=mutableSetOf<String>()
+    @Synchronized internal fun cacheKeys():Set<String> = touched.toSet()
     private val snapshot=ViewerSnapshot(catalog.uid,catalog.root,catalog.id,catalog.containerSha,
         catalog.packs.joinToString(";"){"${it.id}:${it.remoteId}:${it.modified}:${it.sha}"},"tiles-v1:${catalog.originalSha}:$alias")
     init {catalog.validate();require(catalog.ready)}
@@ -71,11 +72,12 @@ internal class TileReader(private val context:Context,val catalog:TileCatalog,
         transfer.requireAccount(catalog.uid,catalog.root)
         val rendered=mutableListOf<RenderTile>()
         try {
+            val prefetched=prefetchAdjacent(entries,current)
             for(tile in entries) {
                 cancel.check()
                 if(!current())throw java.io.InterruptedIOException("Viewport changed")
                 val pack=catalog.packs.single{it.id==tile.pack}
-                val key=snapshot.key("${tile.identity}:${tile.offset}:${tile.length}:${tile.sha}")
+                val key=key(tile)
                 touched+=key
                 // Reserve before transfer/AES as well as raster decode. The consumer retains
                 // the shrunken resident reservation until this RenderTile is retired.
@@ -84,7 +86,7 @@ internal class TileReader(private val context:Context,val catalog:TileCatalog,
                 var transferred=false
                 try {
                 val cached=cache.acquire(key)
-                if(cached!=null)metrics.record(catalog.id,"tile_cache",0,true,tile.length.toLong())
+                if(cached!=null && key !in prefetched)metrics.record(catalog.id,"tile_cache",0,true,tile.length.toLong())
                 val lease=(cached ?: run {
                     val before=requireRemote(pack,transfer.inspect(pack.path))
                     val started=SystemClock.elapsedRealtimeNanos();var ok=false
@@ -125,6 +127,49 @@ internal class TileReader(private val context:Context,val catalog:TileCatalog,
             held.removeAll{it.bitmap.isRecycled};held+=rendered
             rendered
         } catch(e:Exception) {rendered.forEach{it.close()};throw e}
+    }
+    private fun key(tile:TileEntry)=snapshot.key("${tile.identity}:${tile.offset}:${tile.length}:${tile.sha}")
+    /** Coalesce only adjacent requested entries. Never fetch an unrequested gap or a whole original. */
+    private fun prefetchAdjacent(entries:List<TileEntry>,current:()->Boolean):Set<String> {
+        val missing=entries.filter{tile->val lease=cache.acquire(key(tile));if(lease==null)true else{lease.close();false}}
+        val groups=mutableListOf<MutableList<TileEntry>>()
+        for(tile in missing.sortedWith(compareBy<TileEntry>{it.pack}.thenBy{it.offset})) {
+            val previous=groups.lastOrNull()
+            if(previous!=null && previous.last().pack==tile.pack && previous.last().offset+previous.last().length==tile.offset &&
+                previous.sumOf{it.length.toLong()}+tile.length<=TileRaster.MAX_BYTES+28L)previous+=tile
+            else groups+=mutableListOf(tile)
+        }
+        val fetched=mutableSetOf<String>()
+        for(group in groups.filter{it.size>1}) {
+            cancel.check();if(!current())throw java.io.InterruptedIOException("Viewport changed")
+            val length=group.sumOf{it.length};val reservationBytes=TRANSFER_RESERVATION+length
+            val allocation=runCatching{ViewerRuntime.imageBudget.reserve(reservationBytes)}.getOrNull() ?: continue
+            allocation.use {
+                val pack=catalog.packs.single{it.id==group.first().pack}
+                group.forEach{touched+=key(it)}
+                val before=requireRemote(pack,transfer.inspect(pack.path))
+                val started=SystemClock.elapsedRealtimeNanos();var ok=false
+                try {
+                    val bytes=transfer.range(pack.path,group.first().offset,length,pack.bytes)
+                    require(bytes.size==length);cancel.check();if(!current())throw java.io.InterruptedIOException("Viewport changed")
+                    for(tile in group) {
+                        val offset=(tile.offset-group.first().offset).toInt()
+                        val sealed=bytes.copyOfRange(offset,offset+tile.length)
+                        require(tileHash(sealed)==tile.sha)
+                        cipher.open(catalog.aad(tile.coordinate),sealed).fill(0)
+                    }
+                    require(transfer.inspect(pack.path)==before);transfer.requireAccount(catalog.uid,catalog.root)
+                    for(tile in group) {
+                        cancel.check();if(!current())throw java.io.InterruptedIOException("Viewport changed")
+                        val offset=(tile.offset-group.first().offset).toInt();val tileKey=key(tile)
+                        cache.put(tileKey,tile.length.toLong(),cancel){it.write(bytes,offset,tile.length)}.close()
+                        fetched+=tileKey
+                    }
+                    ok=true
+                } finally {metrics.record(catalog.id,"tile_download",SystemClock.elapsedRealtimeNanos()-started,ok,if(ok)length.toLong() else 0)}
+            }
+        }
+        return fetched
     }
     private fun ceilPixels(n:Int,sample:Int)=(n+sample-1)/sample
     private fun requireRemote(p:TilePack,r:ArchiveRemote?):ArchiveRemote {
