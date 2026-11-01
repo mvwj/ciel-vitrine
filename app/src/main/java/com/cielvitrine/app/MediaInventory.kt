@@ -93,7 +93,7 @@ internal class MediaInventory(private val context: Context) {
                     add(ArchiveJob(ArchiveStore.randomId(), null, null,
                         ContentUris.withAppendedId(MediaStore.Files.getContentUri(volume.name), source.mediaId).toString(), name.take(1024), mime.take(256),
                         source.bytes, ArchivePhase.QUEUED,
-                        batchId = batch.id, sourceStamp = source, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
+                        batchId = batch.id, sourceStamp = source, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.CV2,
                         transport = if(source.bytes == null || (source.bytes ?: 0) > MAX_SINGLE_BYTES || mime.startsWith("video/")) OriginalTransport.MULTIPART else OriginalTransport.SINGLE))
                 }
             }
@@ -120,7 +120,7 @@ internal class MediaInventory(private val context: Context) {
         require(source.generation == item.generation && source.bytes == item.bytes && source.modifiedSeconds == item.modifiedSeconds)
         return ArchiveJob(ArchiveStore.randomId(), null, null, item.uri.toString(), item.name, item.mime, item.bytes,
             ArchivePhase.QUEUED, sourceStamp = source,
-            createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
+            createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.CV2,
             transport = if(item.bytes > MAX_SINGLE_BYTES || item.isVideo) OriginalTransport.MULTIPART else OriginalTransport.SINGLE)
     }
     fun openOriginal(job: ArchiveJob): InputStream = openOriginal(Uri.parse(job.source))

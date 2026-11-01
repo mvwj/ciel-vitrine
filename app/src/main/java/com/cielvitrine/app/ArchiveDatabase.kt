@@ -166,14 +166,14 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
     fun upgradeSizeOnlyRows() { transaction {
         val ids = db.rawQuery("SELECT id FROM jobs WHERE phase='UNSUPPORTED_SIZE'",null).use { c -> buildList { while(c.moveToNext())add(c.getString(0)) } }
         ids.forEach { id -> val job=load(id);require(job.proof==null)
-            putJob(job.copy(phase=ArchivePhase.QUEUED,deferred=false,transport=OriginalTransport.MULTIPART,containerExtension=ContainerExtension.BIN,notice="Загрузка частями. Исходник сохранён.")) }
+            putJob(job.copy(phase=ArchivePhase.QUEUED,deferred=false,transport=OriginalTransport.MULTIPART,containerExtension=ContainerExtension.CV2,notice="Загрузка частями. Исходник сохранён.")) }
     } }
     fun setPaused(paused: Boolean) { synchronized(guard) { db.execSQL("UPDATE controls SET value=? WHERE key='paused'", arrayOf(if (paused) 1 else 0)) } }
     fun paused(): Boolean = synchronized(guard) { db.rawQuery("SELECT value FROM controls WHERE key='paused'", null).use { c -> check(c.moveToFirst()); c.getInt(0) != 0 } }
     fun resume(id: String) { val job = load(id); require(job.phase != ArchivePhase.VERIFIED)
         save(job.copy(deferred = false, notice = null, phase = if (job.phase in setOf(ArchivePhase.SOURCE_ERROR, ArchivePhase.UNSUPPORTED_SIZE)) ArchivePhase.QUEUED else job.phase,
             transport = if(job.phase == ArchivePhase.UNSUPPORTED_SIZE) OriginalTransport.MULTIPART else job.transport,
-            containerExtension = if(job.phase == ArchivePhase.UNSUPPORTED_SIZE) ContainerExtension.BIN else job.containerExtension)) }
+            containerExtension = if(job.phase == ArchivePhase.UNSUPPORTED_SIZE) ContainerExtension.CV2 else job.containerExtension)) }
 
     fun createBatch(batch: ArchiveBatch) { transaction { putBatch(batch) } }
     fun batch(id: String): ArchiveBatch = synchronized(guard) {
@@ -233,7 +233,7 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         val payload = try { cipher.seal("group:${group.id}", bytes) } finally { bytes.fill(0) }
         db.insertOrThrow("groups_table", null, ContentValues().apply { put("id", group.id); put("payload", payload) })
         for ((i, cold) in members.withIndex()) putJob(ArchiveJob(galleryIds[i], cold.uid, cold.rootId, cold.source, cold.name, cold.mime,
-            cold.proof!!.originalBytes, zone = OriginalZone.GALLERY, groupId = group.id, coldId = cold.id, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN, transport = if(streamVideo) OriginalTransport.MULTIPART else cold.transport))
+            cold.proof!!.originalBytes, zone = OriginalZone.GALLERY, groupId = group.id, coldId = cold.id, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.CV2, transport = if(streamVideo) OriginalTransport.MULTIPART else cold.transport))
         group
     }
     fun importLegacy(legacy: LegacyArchiveStore) { transaction {

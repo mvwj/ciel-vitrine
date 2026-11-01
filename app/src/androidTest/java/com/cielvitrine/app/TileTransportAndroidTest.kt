@@ -24,6 +24,14 @@ class TileTransportAndroidTest {
     private fun fixture():Bitmap=Bitmap.createBitmap(128,96,Bitmap.Config.ARGB_8888).apply {
         setPixels(IntArray(128*96){i->((i%256) shl 24) or ((i*17)%0x1000000)},0,128,0,0,128,96)
     }
+    @Test fun packPathsRetainLegacySuffixAndPersistNewSuffixBeforeUpload() {
+        val old=TilePack("a".repeat(32),100,"b".repeat(64),attempted=true)
+        assertTrue(old.path.endsWith(".bin"));assertFalse(old.json().has("extension"))
+        assertEquals(old,TilePack.parse(old.json()))
+        val current=old.copy(id="c".repeat(32),extension=ContainerExtension.CV2)
+        assertTrue(current.path.endsWith(".cv2"));assertEquals(current,TilePack.parse(current.json()))
+        assertFails{TilePack.parse(current.json().put("extension","../photo.jpg"))}
+    }
     @Test fun rasterPreservesPixelsAlphaColorAndRejectsInvalidOrTrailingCompression() {
         val original=fixture();val packed=TileRaster.encode(original);val decoded=TileRaster.decode(packed)
         try {assertArrayEquals(bytes(original),bytes(decoded));assertEquals(original.colorSpace,decoded.colorSpace)

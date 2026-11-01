@@ -56,7 +56,7 @@ internal class VideoViewStore(private val context: Context, private val original
         load(quality)?.let{old->return@synchronized if(old.job.deferred)update(quality){it.copy(
             generation=Math.addExact(it.generation,1),job=it.job.copy(deferred=false,notice=null))}else old}
         val id=ArchiveStore.randomId();val job=ArchiveJob(id,original.uid,original.rootId,Uri.fromFile(output(id)).toString(),"view-${quality.edge}.mp4","video/mp4",null,
-            zone=OriginalZone.VIEW,createdAt=System.currentTimeMillis(),containerExtension=ContainerExtension.BIN,transport=OriginalTransport.MULTIPART)
+            zone=OriginalZone.VIEW,createdAt=System.currentTimeMillis(),containerExtension=ContainerExtension.CV2,transport=OriginalTransport.MULTIPART)
         VideoViewRequest(original.id,original.proof!!.originalSha256,quality,job).also{save(it)}
     }
     fun active(quality: VideoQuality, generation: Long): Boolean = synchronized(guard) {

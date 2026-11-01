@@ -173,7 +173,7 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
         context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         val mime = (context.contentResolver.getType(uri) ?: "application/octet-stream").take(256)
         store.save(ArchiveJob(ArchiveStore.randomId(), null, null, uri.toString(), name,
-            mime, bytes, ArchivePhase.QUEUED, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
+            mime, bytes, ArchivePhase.QUEUED, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.CV2,
             transport = if(bytes == null || bytes > MAX_SINGLE_BYTES || mime.startsWith("video/")) OriginalTransport.MULTIPART else OriginalTransport.SINGLE))
     }
     fun prepareAll() = perform("Собираем все доступные фото и видео. Новые файлы после начала сканирования войдут в следующий запуск.") {

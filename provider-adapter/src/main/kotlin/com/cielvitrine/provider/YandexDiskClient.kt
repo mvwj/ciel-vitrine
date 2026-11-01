@@ -104,7 +104,7 @@ class YandexDiskClient internal constructor(
     }
 
     /** Never overwrites another original. 202 is not treated as committed/verified. */
-    fun uploadNew(path: String, byteLength: Long, observe:(UploadTimings,Boolean)->Unit={_,_->},openSource: () -> InputStream): UploadReceipt {
+    fun uploadNew(path: String, byteLength: Long, observe:(UploadTimings,Boolean)->Unit={_,_->},forceHttp1:Boolean=false,openSource: () -> InputStream): UploadReceipt {
         require(byteLength >= 0)
         val linkStarted=System.nanoTime()
         val link = signedLink("resources/upload", path, "PUT", mapOf("overwrite" to "false"))
@@ -145,7 +145,7 @@ class YandexDiskClient internal constructor(
             override fun responseHeadersStart(call:okhttp3.Call){phase="response_headers"}
         }
         var success=false
-        try {http.newBuilder().readTimeout(180,TimeUnit.SECONDS).eventListener(listener).build().newCall(Request.Builder().url(link).put(body).build()).execute().use { response ->
+        try {http.newBuilder().apply{if(forceHttp1)protocols(listOf(okhttp3.Protocol.HTTP_1_1))}.readTimeout(180,TimeUnit.SECONDS).eventListener(listener).build().newCall(Request.Builder().url(link).put(body).build()).execute().use { response ->
             code=response.code;success=code==201 || code==202
             val timing=UploadTimings(linkNanos,System.nanoTime()-requestStarted,bodyNanos,bodyBytes,phase,code)
             return when (response.code) {

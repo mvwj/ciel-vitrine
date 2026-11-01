@@ -134,7 +134,7 @@ internal class TileProducer(private val context:Context,private val catalogs:Til
                 fun flush() {
                     if(pending.isEmpty())return
                     output!!.fd.sync();output!!.close();output=null
-                    val pack=TilePack(packId,length,tileFileHash(packFile))
+                    val pack=TilePack(packId,length,tileFileHash(packFile),extension=ContainerExtension.CV2)
                     val next=catalog!!.copy(tiles=catalog!!.tiles+pending,packs=catalog!!.packs+pack,deferred=false)
                     catalogs.save(next);catalog=next // durable intent includes offsets and digests before PUT
                     catalog=commit(next,pack,cloud)

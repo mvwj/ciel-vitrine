@@ -130,7 +130,7 @@ internal class AndroidMultipartStaging(private val context: Context, private val
             }
             require(proof.originalBytes == part.bytes && proof.originalSha256 == part.sha && proof.times == passport.times)
             output.inputStream().use { require(ArchiveProof.from(Pos2.read(it, ColdArchive.Sink, part.bytes, part.sha, part.bytes)) == proof) }
-            checkSource(); return MultipartIntent(id, proof)
+            checkSource(); return MultipartIntent(id, proof,extension=ContainerExtension.CV2)
         } catch(e: Exception) { output.delete(); throw e }
     }
     override fun prepareManifest(bytes: ByteArray, passport: MultipartPassport, id: String?): MultipartIntent {
@@ -139,14 +139,14 @@ internal class AndroidMultipartStaging(private val context: Context, private val
         if(output.exists()) {
             val recovered = output.inputStream().use { Pos2.read(it, ColdArchive.Sink, bytes.size.toLong(), tileHash(bytes), MultipartFormat.MANIFEST_MAX_BYTES) }
             require(recovered.times == passport.times && recovered.name == "manifest.json" && recovered.mime == "application/vnd.ciel.multipart+json")
-            return MultipartIntent(key, ArchiveProof.from(recovered))
+            return MultipartIntent(key, ArchiveProof.from(recovered),extension=if(id==job.id)job.containerExtension else ContainerExtension.CV2)
         }
         try {
             val proof = FileOutputStream(output).use { sink ->
                 ArchiveProof.from(Pos2.write(bytes.inputStream(), sink, "manifest.json", "application/vnd.ciel.multipart+json", bytes.size.toLong(), MultipartFormat.MANIFEST_MAX_BYTES, times = passport.times)).also { sink.fd.sync() }
             }
             output.inputStream().use { require(ArchiveProof.from(Pos2.read(it, ColdArchive.Sink, proof.originalBytes, proof.originalSha256, MultipartFormat.MANIFEST_MAX_BYTES)) == proof) }
-            return MultipartIntent(key, proof)
+            return MultipartIntent(key, proof,extension=if(id==job.id)job.containerExtension else ContainerExtension.CV2)
         } catch(e: Exception) { output.delete(); throw e }
     }
     override fun open(id: String): InputStream {

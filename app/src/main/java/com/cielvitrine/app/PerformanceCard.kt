@@ -22,7 +22,7 @@ import java.util.Locale
     }}
     val stages=linkedMapOf("encrypt" to "Шифрование", "prepare" to "Подготовка целиком", "upload" to "Отправка и запросы", "verify" to "Обратная проверка",
         "download" to "Скачивание оригинала", "restore" to "Восстановление и проверка", "image_decode" to "Декодирование", "open_first_frame" to "Первый кадр", "zoom_decode" to "Детали при зуме", "zoom_first_frame" to "Показ деталей", "cache_read" to "Проверка кэша",
-        "http_upload_link" to "Получение ссылки для отправки", "http_upload_body" to "Чтение и отправка тела", "http_upload_request" to "Отправка до ответа сервера",
+        "http_upload_link" to "Получение ссылки для отправки", "http_upload_body" to "Запись тела запроса в сетевой буфер", "http_upload_request" to "Отправка до ответа сервера",
         "tile_prepare" to "Подготовка фрагментов", "tile_upload" to "Загрузка фрагментов", "tile_verify" to "Проверка фрагментов", "tile_download" to "Скачивание участков", "tile_cache" to "Участки из кэша", "tile_decode" to "Декодирование участков", "cloud_first_frame" to "Первый облачный кадр", "cloud_zoom_frame" to "Облачный зум")
     Column(Modifier.fillMaxWidth().padding(20.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
         Text("Замеры ваших файлов",style=MaterialTheme.typography.titleMedium)
@@ -43,13 +43,17 @@ import java.util.Locale
         }
         if(values.isEmpty())Text("Выберите фото → «В облако». После проверки откройте облачную копию и увеличьте её.",style=MaterialTheme.typography.bodySmall)
         stages.forEach{(stage,label)->values[stage]?.let{v->Text("$label: последняя ${String.format(Locale.ROOT,"%.1f",v.getDouble("last_ms"))} мс · попыток ${counts[stage]} · ошибок ${failures[stage]}",style=MaterialTheme.typography.bodySmall)}}
-        var bodyBytes=0L;var requestMs=0.0;var linkMs=0.0
+        var bodyBytes=0L;var requestMs=0.0;var successfulRequests=0
         if(rows!=null)for(i in 0 until rows.length()) {
-            val totals=rows.getJSONObject(i).optJSONObject("totals") ?: continue
-            totals.optJSONObject("http_upload_request")?.let{bodyBytes+=it.optLong("bytes");requestMs+=it.optDouble("ms")}
-            linkMs+=totals.optJSONObject("http_upload_link")?.optDouble("ms") ?: 0.0
+            val events=rows.getJSONObject(i).optJSONArray("events") ?: continue
+            for(j in 0 until events.length()) {
+                val event=events.getJSONObject(j)
+                if(event.optString("stage")=="http_upload_request" && event.optBoolean("ok")) {
+                    bodyBytes+=event.optLong("bytes");requestMs+=event.optDouble("duration_ms");successfulRequests++
+                }
+            }
         }
-        if(bodyBytes>0 && requestMs>0)Text("Отправлено оригинальных контейнеров: ${String.format(Locale.ROOT,"%.2f",bodyBytes/1e6)} МБ · до ответа сервера: ${String.format(Locale.ROOT,"%.1f",requestMs/1000)} с · средняя ${String.format(Locale.ROOT,"%.2f",bodyBytes/1000.0/requestMs)} МБ/с · получение ссылок: ${String.format(Locale.ROOT,"%.1f",linkMs/1000)} с",style=MaterialTheme.typography.bodySmall)
+        if(bodyBytes>0 && requestMs>0)Text("Успешные отправки в отчёте: $successfulRequests · ${String.format(Locale.ROOT,"%.2f",bodyBytes/1e6)} МБ · до ответа сервера: ${String.format(Locale.ROOT,"%.1f",requestMs/1000)} с · средняя ${String.format(Locale.ROOT,"%.2f",bodyBytes/1000.0/requestMs)} МБ/с. Обратная проверка учитывается отдельно.",style=MaterialTheme.typography.bodySmall)
         if(networkBytes>0)Text("Получено участков: $networkBytes байт",style=MaterialTheme.typography.bodySmall)
     }
 }

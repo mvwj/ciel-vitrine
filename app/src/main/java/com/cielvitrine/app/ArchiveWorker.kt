@@ -53,8 +53,17 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
                             val completed=store.load(job.id)
                             if(completed.phase==ArchivePhase.VERIFIED && completed.zone==OriginalZone.GALLERY && completed.mime.startsWith("image/"))TileWorker.enqueue(applicationContext,job.id)
                             if(completed.phase==ArchivePhase.VERIFIED)ProtectionWorker.enqueue(applicationContext)
-                            setProgressAsync(workDataOf("phase" to store.load(job.id).phase.name))
+                            // Multipart steps can retain QUEUED for minutes. The committed revision
+                            // makes WorkInfo observers refresh counters without rescanning media.
+                            setProgressAsync(workDataOf("phase" to completed.phase.name,"job" to completed.id,"revision" to completed.revision))
                         } catch (error: Exception) {
+                            if(BuildConfig.DEBUG)runCatching{
+                                val site=error.stackTrace.firstOrNull{it.className.startsWith("com.cielvitrine.")}
+                                val row=org.json.JSONObject().put("at",System.currentTimeMillis()).put("type",error.javaClass.simpleName)
+                                    .put("site",site?.className?.substringAfterLast('.') ?: "native").put("line",site?.lineNumber ?: -1)
+                                val f=android.util.AtomicFile(File(applicationContext.filesDir,"archive-failure-summary.json"));val out=f.startWrite()
+                                try{out.write(row.toString().toByteArray());f.finishWrite(out)}catch(e:Exception){f.failWrite(out);throw e}
+                            }
                             if (stopping()) break
                             val current = store.load(job.id)
                             if (current.phase == ArchivePhase.VERIFIED) {
