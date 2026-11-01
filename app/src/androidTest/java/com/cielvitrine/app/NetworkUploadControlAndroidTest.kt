@@ -41,10 +41,11 @@ class NetworkUploadControlAndroidTest {
         try {
             save("pausing_queue")
             val manager=WorkManager.getInstance(context);val deadline=System.nanoTime()+300_000_000_000L
-            while(manager.getWorkInfosForUniqueWork("archive-upload-queue").get().any{it.state==WorkInfo.State.RUNNING}) {
+            while(ArchiveUserTransfer.running() || manager.getWorkInfosForUniqueWork("archive-upload-queue").get().any{it.state==WorkInfo.State.RUNNING}) {
                 check(System.nanoTime()<deadline){"Archive transfer did not reach a safe pause"};Thread.sleep(200)
             }
             manager.cancelUniqueWork("archive-upload-queue").result.get()
+            ArchiveUserTransfer.cancelPending(context)
             save("checking_account")
             val session=YandexSessionStore(context).load()!!
             val client=YandexDiskClient{session.token};val cloud=YandexArchiveCloud(context,session)

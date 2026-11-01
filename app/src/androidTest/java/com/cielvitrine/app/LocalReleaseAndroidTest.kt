@@ -132,29 +132,13 @@ class LocalReleaseAndroidTest {
                 assertTrue(f.originalPresent());compose.onNodeWithText("Release fixture").performClick()
             }
             fun chooseSystem(allow:Boolean) {
-            val deadline=System.nanoTime()+15_000_000_000L;var clicked=false
-            while(!clicked && System.nanoTime()<deadline) {
-                fun positive(node:android.view.accessibility.AccessibilityNodeInfo?):android.view.accessibility.AccessibilityNodeInfo? {
-                    if(node==null)return null
-                    val text=node.text?.toString().orEmpty()
-                    val id=node.viewIdResourceName.orEmpty()
-                    val match=if(allow)id=="android:id/button1" || id.endsWith(":id/button_positive") || text in setOf("Allow","Delete")
-                        else id=="android:id/button2" || id.endsWith(":id/button_negative") || text in setOf("Don't allow","Don’t allow","Deny","Cancel")
-                    if(node.isVisibleToUser && node.isClickable && node.isEnabled && match)return node
-                    for(i in 0 until node.childCount)positive(node.getChild(i))?.let{return it}
-                    return null
-                }
-                val roots=(instrument.uiAutomation.windows.mapNotNull{it.root}+listOfNotNull(instrument.uiAutomation.rootInActiveWindow))
-                for(root in roots) {
-                    val pkg=root.packageName?.toString().orEmpty()
-                    if(pkg.contains("media") || pkg.contains("permissioncontroller") || pkg=="android") {
-                        positive(root)?.let{button->clicked=button.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK)}
-                        if(clicked)break
-                    }
-                }
-                if(!clicked)Thread.sleep(100)
-            }
-            assertTrue("System fixture-only consent button was not found",clicked)
+                val device=androidx.test.uiautomator.UiDevice.getInstance(instrument)
+                val systemPackages=java.util.regex.Pattern.compile("com\\.(?:google\\.)?android\\.(?:providers\\.media(?:\\.module)?|permissioncontroller)|android")
+                val selector=androidx.test.uiautomator.By.res("android",if(allow)"button1" else "button2").pkg(systemPackages)
+                device.waitForIdle()
+                val button=device.wait(androidx.test.uiautomator.Until.findObject(selector),20_000)
+                assertNotNull("System fixture-only consent button missing; result=${response.get()}",button)
+                button!!.click()
             }
             prepareAndOpen();chooseSystem(false)
             compose.waitUntil(10000){response.get()!=Int.MIN_VALUE}

@@ -297,6 +297,9 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                 }
                 Destination.CLOUD -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     item { CloudActivityCard(archive,yandex){} }
+                    if(archive.queueNotice!=null && !archive.busy)item {
+                        Button(onClick={archiveModel.pause(false)},modifier=Modifier.padding(horizontal=16.dp).fillMaxWidth()) {Text("Продолжить передачу")}
+                    }
                     item { SelectedTransfersCard(archive) }
                     if (state.cloud?.provider != "Google Drive" || yandex.account != null) item {
                         YandexAccountCard(yandex, { signInYandex() }, { cloudModel.recheck() }, { cloudModel.disconnect() })

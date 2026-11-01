@@ -41,7 +41,7 @@ class OwnedCloudBenchmarkAndroidTest {
         ProtectionWorker.enqueue(context);ArchiveWorker.enqueue(context);id
     }
     private fun selectMeasurements(s:JSONObject) {
-        val ids=listOf("photo","video").mapNotNull{key->s.optString(key).takeIf{it.matches(TileCatalog.ID)}}.toSet()
+        val ids=listOf("photo","video","clip").mapNotNull{key->s.optString(key).takeIf{it.matches(TileCatalog.ID)}}.toSet()
         context.getSharedPreferences("measurement-selection",0).edit().putStringSet("ids",ids).commit()
     }
     private fun queuePhoto() {
@@ -81,6 +81,26 @@ class OwnedCloudBenchmarkAndroidTest {
         }
         ArchiveWorker.enqueue(context);ProtectionWorker.enqueue(context)
     }
+    private fun retryVideo() {
+        val s=state()
+        ArchiveStore(context).use { store ->
+            val cold=store.load(s.getString("video"));require(cold.name=="ciel-benchmark-4k-1GB.mp4")
+            val working=store.protection(cold.id)?.workingId
+            listOfNotNull(cold.id,working).forEach { id -> val job=store.load(id)
+                if(job.deferred && job.phase!=ArchivePhase.VERIFIED)store.resume(id)
+            }
+        }
+        report();ArchiveWorker.enqueue(context,true);ProtectionWorker.enqueue(context)
+    }
+    private fun queueClip() {
+        val s=state()
+        if(!s.has("clip")) {
+            val item=library().single{it.name=="ciel-benchmark-4k-short.mp4" && it.folder=="CielVitrineTests"}
+            require(item.isVideo && item.bytes==12_254_171L && item.width==3840 && item.height==2160)
+            s.put("clip",queue(item));save(s)
+        }
+        selectMeasurements(s);ArchiveWorker.enqueue(context,true);ProtectionWorker.enqueue(context);report()
+    }
     private fun newPhotoAttempt() {
         val s=state();val oldId=s.getString("photo")
         ArchiveStore(context).use { store ->
@@ -118,7 +138,7 @@ class OwnedCloudBenchmarkAndroidTest {
             val intent=if(state!=null && state.nextPart<state.passport.parts)journal.part(state.nextPart).intent else null
             if(intent?.attempted==true) {
                 val cloud=YandexArchiveCloud(context,YandexSessionStore(context).load()!!)
-                val remote=cloud.inspect("app:/ciel-vitrine-v2/cold/${intent.id}.bin")
+                val remote=cloud.inspect(intent.path(job.zone))
                 result.put("attempted_part_observed",remote!=null).put("observed_part_bytes",remote?.bytes ?: -1)
                 if(remote!=null)result.put("expected_part_size_matches",remote.bytes==intent.proof.containerBytes)
             }
@@ -129,7 +149,7 @@ class OwnedCloudBenchmarkAndroidTest {
     private fun report(extra:JSONObject=JSONObject()) {
         val s=state();val rows=JSONArray();val ids=mutableSetOf<String>()
         ArchiveStore(context).use { store ->
-            listOf("photo","video").forEach { kind ->
+            listOf("photo","video","clip").forEach { kind ->
                 if(s.has(kind)) {
                     val id=s.getString(kind);ids+=id;val cold=store.load(id);val p=store.protection(id)
                     val working=p?.workingId?.let(store::load);working?.let{ids+=it.id}
@@ -223,6 +243,8 @@ class OwnedCloudBenchmarkAndroidTest {
             "new_photo_attempt"->{newPhotoAttempt();report()}
             "new_video_attempt"->{newVideoAttempt();report()}
             "probe_video"->probeVideo()
+            "retry_video"->retryVideo()
+            "queue_clip"->queueClip()
             "photo_view"->photoView()
             "status"->report()
             else->error("Unknown owned benchmark phase")

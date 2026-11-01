@@ -11,83 +11,20 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context, params) {
-    override fun doWork(): Result = ArchiveStore(applicationContext).use { store ->
-        try {
-            store.importLegacy(LegacyArchiveStore(applicationContext))
-            RandomAccessFile(File(applicationContext.noBackupFilesDir, "cold-worker.lock"), "rw").use { lockFile ->
-                val lock = try { lockFile.channel.tryLock() } catch (_: java.nio.channels.OverlappingFileLockException) { null }
-                if (lock == null) return Result.retry()
-                lock.use {
-                    val saved = YandexSessionStore(applicationContext).load() ?: return Result.success()
-                    if (saved.expiresAtMillis != null && saved.expiresAtMillis <= System.currentTimeMillis() || saved.appRootId.isNullOrBlank()) return Result.success()
-                    var activeId:String?=null
-                    val cloud = YandexArchiveCloud(applicationContext, saved,progress={stage,bytes,total->activeId?.let{TransferActivity.update(it,stage,bytes,total)}},timingId={activeId})
-                    cloud.requireAccount(saved.uid, saved.appRootId!!)
-                    applicationContext.getSharedPreferences("archive-queue-state",0).edit().remove("error").commit()
-                    val stopping = { isStopped || store.paused() }
-                    val staging = AndroidArchiveStaging(applicationContext, stopping, store, cloud)
-                    staging.cleanVerifiedOwned(store)
-                    val engine = ColdArchive(store, staging, cloud, stopping)
-                    val deadline = System.nanoTime() + 180_000_000_000L
-                    while (!stopping() && System.nanoTime() < deadline) {
-                        val job = store.next() ?: break
-                        activeId=job.id;TransferActivity.update(job.id,"prepare")
-                        try {
-                            if (job.uid == null) {
-                                cloud.requireAccount(saved.uid, saved.appRootId!!)
-                                store.save(job.copy(uid = saved.uid, rootId = saved.appRootId))
-                            }
-                            if(job.transport == OriginalTransport.MULTIPART) {
-                                setForegroundAsync(mediaForeground(applicationContext,101,"Сохраняем оригиналы частями")).get()
-                                val bound = store.load(job.id)
-                                val multipart = AndroidMultipartStore(applicationContext, bound)
-                                val source = AndroidMultipartStaging(applicationContext, bound, store, cloud, stopping)
-                                MultipartArchive(store, multipart, source, cloud, stopping, timed = { stage, action ->
-                                    TransferActivity.update(job.id,stage);PerformanceJournal(applicationContext).timed(job.id, stage, action)
-                                }).step(job.id)
-                            } else {
-                                val stage = when (job.phase) { ArchivePhase.QUEUED -> "prepare"; ArchivePhase.PREPARED -> "upload"; else -> "verify" }
-                                TransferActivity.update(job.id,stage)
-                                PerformanceJournal(applicationContext).timed(job.id, stage) { engine.step(job.id) }
-                            }
-                            val completed=store.load(job.id)
-                            if(completed.phase==ArchivePhase.VERIFIED && completed.zone==OriginalZone.GALLERY && completed.mime.startsWith("image/"))TileWorker.enqueue(applicationContext,job.id)
-                            if(completed.phase==ArchivePhase.VERIFIED)ProtectionWorker.enqueue(applicationContext)
-                            // Multipart steps can retain QUEUED for minutes. The committed revision
-                            // makes WorkInfo observers refresh counters without rescanning media.
-                            setProgressAsync(workDataOf("phase" to completed.phase.name,"job" to completed.id,"revision" to completed.revision))
-                        } catch (error: Exception) {
-                            if(BuildConfig.DEBUG)runCatching{
-                                val site=error.stackTrace.firstOrNull{it.className.startsWith("com.cielvitrine.")}
-                                val row=org.json.JSONObject().put("at",System.currentTimeMillis()).put("type",error.javaClass.simpleName)
-                                    .put("site",site?.className?.substringAfterLast('.') ?: "native").put("line",site?.lineNumber ?: -1)
-                                val f=android.util.AtomicFile(File(applicationContext.filesDir,"archive-failure-summary.json"));val out=f.startWrite()
-                                try{out.write(row.toString().toByteArray());f.finishWrite(out)}catch(e:Exception){f.failWrite(out);throw e}
-                            }
-                            if (stopping()) break
-                            val current = store.load(job.id)
-                            if (current.phase == ArchivePhase.VERIFIED) {
-                                store.save(current.copy(notice = "Копия проверена; временный контейнер пока не удалось убрать."))
-                                continue
-                            }
-                            // A provider-wide outage must not mark every untouched inventory row as a file failure.
-                            cloud.requireAccount(saved.uid, saved.appRootId!!)
-                            store.save(current.copy(deferred = true, notice = if (current.phase == ArchivePhase.UPLOAD_UNCERTAIN)
-                                "Результат загрузки не подтверждён. Повторяется только проверка; исходник и контейнер сохранены."
-                            else "${archiveFailureReason(error)} Исходник сохранён."))
-                        } finally {TransferActivity.clear(job.id);activeId=null}
-                    }
-                    if (!stopping() && store.next() != null) enqueue(applicationContext)
-                }
-            }
-            Result.success()
-        } catch (error: Exception) {
-            applicationContext.getSharedPreferences("archive-queue-state",0).edit().putString("error",archiveFailureReason(error)).commit()
-            if (!isStopped && runAttemptCount < 2) Result.retry() else Result.success()
+    override fun doWork():Result {
+        if(ArchiveUserTransfer.pending(applicationContext))return Result.success()
+        return when(runArchiveQueue(applicationContext,{isStopped},
+            {setForegroundAsync(mediaForeground(applicationContext,101,"Сохраняем оригиналы частями")).get()},
+            {setProgressAsync(workDataOf("phase" to it.phase.name,"job" to it.id,"revision" to it.revision))},runAttemptCount<2)) {
+            ArchiveQueueResult.DONE -> Result.success()
+            ArchiveQueueResult.MORE -> {enqueue(applicationContext);Result.success()}
+            ArchiveQueueResult.BUSY,ArchiveQueueResult.RETRY -> Result.retry()
         }
     }
     companion object {
         fun enqueue(context: Context,userInitiated:Boolean=false) {
+            if(userInitiated && ArchiveUserTransfer.schedule(context))return
+            if(ArchiveUserTransfer.pending(context))return
             fun request(id:java.util.UUID?=null):OneTimeWorkRequest {
                 val builder=OneTimeWorkRequestBuilder<ArchiveWorker>()
                 .addTag("cold-archive").setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
@@ -106,9 +43,109 @@ class ArchiveWorker(context: Context, params: WorkerParameters) : Worker(context
     }
 }
 
+internal enum class ArchiveQueueResult { DONE, MORE, BUSY, RETRY }
+
+internal fun runArchiveQueue(context:Context,stopped:()->Boolean,foreground:()->Unit,progress:(ArchiveJob)->Unit,allowRetry:Boolean=true):ArchiveQueueResult {
+    if(stopped() || context.getSharedPreferences("archive-queue-state",0).getBoolean("user-stopped",false))return ArchiveQueueResult.DONE
+    return ArchiveStore(context).use { store ->
+        try {
+            if(store.paused())return ArchiveQueueResult.DONE
+            store.importLegacy(LegacyArchiveStore(context))
+            RandomAccessFile(File(context.noBackupFilesDir, "cold-worker.lock"), "rw").use { lockFile ->
+                val lock = try { lockFile.channel.tryLock() } catch (_: java.nio.channels.OverlappingFileLockException) { null }
+                if (lock == null) return ArchiveQueueResult.BUSY
+                lock.use {
+                    val saved = YandexSessionStore(context).load() ?: return ArchiveQueueResult.DONE
+                    if (saved.expiresAtMillis != null && saved.expiresAtMillis <= System.currentTimeMillis() || saved.appRootId.isNullOrBlank()) return ArchiveQueueResult.DONE
+                    var activeId:String?=null
+                    var foregroundSet=false
+                    val cloud = YandexArchiveCloud(context, saved,progress={stage,bytes,total->activeId?.let{TransferActivity.update(it,stage,bytes,total)}},timingId={activeId})
+                    cloud.requireAccount(saved.uid, saved.appRootId!!)
+                    context.getSharedPreferences("archive-queue-state",0).edit().remove("error").commit()
+                    val stopping = { stopped() || store.paused() }
+                    val staging = AndroidArchiveStaging(context, stopping, store, cloud)
+                    staging.cleanVerifiedOwned(store)
+                    val engine = ColdArchive(store, staging, cloud, stopping)
+                    val deadline = System.nanoTime() + 180_000_000_000L
+                    while (!stopping() && System.nanoTime() < deadline) {
+                        val job = store.next() ?: break
+                        activeId=job.id;TransferActivity.update(job.id,"prepare")
+                        try {
+                            if (job.uid == null) {
+                                cloud.requireAccount(saved.uid, saved.appRootId!!)
+                                store.save(job.copy(uid = saved.uid, rootId = saved.appRootId))
+                            }
+                            if(job.transport == OriginalTransport.MULTIPART) {
+                                if(!foregroundSet) {
+                                    foreground()
+                                    foregroundSet=true
+                                }
+                                val bound = store.load(job.id)
+                                val multipart = AndroidMultipartStore(context, bound)
+                                val source = AndroidMultipartStaging(context, bound, store, cloud, stopping)
+                                MultipartArchive(store, multipart, source, cloud, stopping, timed = { stage, action ->
+                                    TransferActivity.update(job.id,stage);PerformanceJournal(context).timed(job.id, stage, action)
+                                }).step(job.id)
+                            } else {
+                                val stage = when (job.phase) { ArchivePhase.QUEUED -> "prepare"; ArchivePhase.PREPARED -> "upload"; else -> "verify" }
+                                TransferActivity.update(job.id,stage)
+                                PerformanceJournal(context).timed(job.id, stage) { engine.step(job.id) }
+                            }
+                            val completed=store.load(job.id)
+                            if(completed.phase==ArchivePhase.VERIFIED && completed.zone==OriginalZone.GALLERY && completed.mime.startsWith("image/"))TileWorker.enqueue(context,job.id)
+                            if(completed.phase==ArchivePhase.VERIFIED) {
+                                // Create the dependent working copy before this transfer can become
+                                // idle. JobScheduler may otherwise delay the separate orchestrator.
+                                val coldId=if(completed.zone==OriginalZone.COLD)completed.id else completed.coldId
+                                coldId?.let{store.protection(it)}?.let { plan ->
+                                    try{ProtectionWorker.advance(context,store,plan)}catch(_:Exception){
+                                        val current=store.protection(plan.coldId)!!
+                                        store.saveProtection(current.copy(stage=ProtectionStage.ERROR,notice="Подготовка остановлена. Оригинал остаётся на телефоне. Нажмите «Повторить»."))
+                                    }
+                                }
+                                ProtectionWorker.enqueue(context)
+                            }
+                            // Multipart steps can retain QUEUED for minutes. The committed revision
+                            // makes WorkInfo observers refresh counters without rescanning media.
+                            progress(completed);ArchiveQueueEvents.changed()
+                        } catch (error: Exception) {
+                            if(BuildConfig.DEBUG)runCatching{
+                                val site=error.stackTrace.firstOrNull{it.className.startsWith("com.cielvitrine.")}
+                                val row=org.json.JSONObject().put("at",System.currentTimeMillis()).put("type",error.javaClass.simpleName)
+                                    .put("site",site?.className?.substringAfterLast('.') ?: "native").put("line",site?.lineNumber ?: -1)
+                                    .put("causes",org.json.JSONArray(generateSequence<Throwable>(error){it.cause}.take(8).map{it.javaClass.simpleName}.toList()))
+                                val f=android.util.AtomicFile(File(context.filesDir,"archive-failure-summary.json"));val out=f.startWrite()
+                                try{out.write(row.toString().toByteArray());f.finishWrite(out)}catch(e:Exception){f.failWrite(out);throw e}
+                            }
+                            if (stopping()) break
+                            if(generateSequence<Throwable>(error){it.cause}.take(8).any{it.javaClass.simpleName=="ForegroundServiceStartNotAllowedException"})throw error
+                            val current = store.load(job.id)
+                            if (current.phase == ArchivePhase.VERIFIED) {
+                                store.save(current.copy(notice = "Копия проверена; временный контейнер пока не удалось убрать."))
+                                continue
+                            }
+                            // A provider-wide outage must not mark every untouched inventory row as a file failure.
+                            cloud.requireAccount(saved.uid, saved.appRootId!!)
+                            store.save(current.copy(deferred = true, notice = if (current.phase == ArchivePhase.UPLOAD_UNCERTAIN)
+                                "Результат загрузки не подтверждён. Повторяется только проверка; исходник и контейнер сохранены."
+                            else "${archiveFailureReason(error)} Исходник сохранён."))
+                        } finally {store.yieldAfterStep(job.id);TransferActivity.clear(job.id);activeId=null}
+                    }
+                    if (!stopping() && store.next() != null) return ArchiveQueueResult.MORE
+                }
+            }
+            ArchiveQueueResult.DONE
+        } catch (error: Exception) {
+            context.getSharedPreferences("archive-queue-state",0).edit().putString("error",archiveFailureReason(error)).commit()
+            if (!stopped() && allowRetry) ArchiveQueueResult.RETRY else ArchiveQueueResult.DONE
+        }
+    }
+}
+
 internal fun archiveFailureReason(error:Throwable):String {
     val causes=generateSequence(error){it.cause}.take(8).toList()
     return when {
+        causes.any{it.javaClass.simpleName=="ForegroundServiceStartNotAllowedException"}->"Android ограничил фоновую передачу. Откройте галерею и нажмите «Продолжить»."
         causes.any{it is java.net.SocketTimeoutException || it is java.io.InterruptedIOException}->"Яндекс не ответил вовремя. Проверьте сеть и повторите."
         causes.any{it is java.net.UnknownHostException || it is java.net.ConnectException}->"Нет связи с Яндексом. Очередь сохранена."
         causes.any{it is SecurityException}->"Нет доступа к исходному файлу или его метаданным."

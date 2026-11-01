@@ -88,6 +88,7 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
             }
     }
     init { viewModelScope.launch {for(request in statusRequests)rebuildStatuses()}
+        viewModelScope.launch {ArchiveQueueEvents.revision.collect{delay(500);refresh()}}
         viewModelScope.launch {WorkManager.getInstance(context).getWorkInfosByTagFlow("gallery-tiles").collect{refresh()}}
         viewModelScope.launch {WorkManager.getInstance(context).getWorkInfosByTagFlow("protection-plans").collect{refresh()}}
         viewModelScope.launch {TransferActivity.state.collect { delay(150);publishActivity() }}

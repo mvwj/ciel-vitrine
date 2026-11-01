@@ -56,6 +56,30 @@ internal class AndroidMultipartStaging(private val context: Context, private val
         check(held + MultipartFormat.PART_BYTES + 262144 <= 128L * 1024 * 1024 && directory.usableSpace > MultipartFormat.PART_BYTES + 64L * 1024 * 1024) { "Недостаточно временного места" }
     }
     private fun checkSource() { check(!stopped()); if(job.zone != OriginalZone.GALLERY) inventory.requireUnchanged(job) }
+    private fun localColdAvailable(source:ArchiveJob):Boolean=source.sourceStamp!=null && source.proof?.times!=null && runCatching{inventory.requireUnchanged(source)}.isSuccess
+    private fun scanLocal(source:ArchiveJob,save:(PlannedPart)->Unit):MultipartPassport {
+        inventory.requireUnchanged(source)
+        val passport=inventory.openOriginal(source).use { input ->
+            val times=OriginalDatePolicy.capture(context,Uri.parse(source.source),input)
+            require(times==source.proof!!.times)
+            MultipartFormat.scan(stoppable(input),times){i,offset,bytes,sha->
+                save(PlannedPart(i,offset,bytes,sha));TransferActivity.update(job.id,"scan",offset+bytes,source.proof!!.originalBytes)
+            }.also{require(OriginalDatePolicy.capture(context,Uri.parse(source.source),input)==times)}
+        }
+        inventory.requireUnchanged(source)
+        require(passport.bytes==source.proof!!.originalBytes && passport.sha==source.proof!!.originalSha256 && passport.times==source.proof!!.times)
+        return passport
+    }
+    private fun encodeLocalPart(source:ArchiveJob,part:PlannedPart,passport:MultipartPassport,sink:OutputStream):com.cielvitrine.pos.Pos2Result {
+        inventory.requireUnchanged(source)
+        val result=inventory.openOriginal(source).use { input ->
+            require(OriginalDatePolicy.capture(context,Uri.parse(source.source),input)==passport.times)
+            skipExactly(input,part.offset)
+            Pos2.write(LimitedInput(stoppable(input),part.bytes),sink,job.name,job.mime,part.bytes,part.bytes,times=passport.times)
+                .also{require(OriginalDatePolicy.capture(context,Uri.parse(source.source),input)==passport.times)}
+        }
+        inventory.requireUnchanged(source);return result
+    }
     private fun cold(fullReadback:Boolean=false): ArchiveJob {
         val group = jobs.group(job.groupId!!) ?: error("Resource group missing"); group.validate()
         require(group.declaredComplete && group.coldIds[group.galleryIds.indexOf(job.id)] == job.coldId)
@@ -80,6 +104,9 @@ internal class AndroidMultipartStaging(private val context: Context, private val
         checkSource()
         if(job.zone == OriginalZone.GALLERY) {
             val source = cold(fullReadback=true); val expected = source.proof!!
+            // A complete cold proof already exists. Reuse an unchanged local original only
+            // after a fresh full hash/date/source check; retain the cloud path when absent.
+            if(localColdAvailable(source))return scanLocal(source,save)
             if(source.transport == OriginalTransport.SINGLE) {
                 val passport = fromSingle(source, 0, expected.originalBytes) { input ->
                     MultipartFormat.scan(input, expected.times) { i,o,n,h -> save(PlannedPart(i,o,n,h)) }
@@ -92,14 +119,18 @@ internal class AndroidMultipartStaging(private val context: Context, private val
             val hash = MessageDigest.getInstance("SHA-256"); var offset = 0L
             for(index in 0 until state.passport.parts) {
                 check(!stopped()); val bytes = coldPart(source, index)
-                try { hash.update(bytes); save(PlannedPart(index, offset, bytes.size.toLong(), tileHash(bytes))); offset += bytes.size } finally { bytes.fill(0) }
+                try { hash.update(bytes); save(PlannedPart(index, offset, bytes.size.toLong(), tileHash(bytes))); offset += bytes.size
+                    TransferActivity.update(job.id,"scan",offset,expected.originalBytes)
+                } finally { bytes.fill(0) }
             }
             require(offset == expected.originalBytes && hash.digest().let { tileHex(it) } == expected.originalSha256)
             cold(); return state.passport
         }
         val passport = inventory.openOriginal(job).use { input ->
             val times = OriginalDatePolicy.capture(context, Uri.parse(job.source), input)
-            MultipartFormat.scan(stoppable(input), times) { index, offset, bytes, sha -> save(PlannedPart(index, offset, bytes, sha)) }
+            MultipartFormat.scan(stoppable(input), times) { index, offset, bytes, sha -> save(PlannedPart(index, offset, bytes, sha))
+                TransferActivity.update(job.id,"scan",offset+bytes,job.sourceBytes ?: 0)
+            }
                 .also { require(OriginalDatePolicy.capture(context, Uri.parse(job.source), input) == times) }
         }
         require(job.sourceBytes == null || job.sourceBytes == passport.bytes); checkSource(); return passport
@@ -112,7 +143,8 @@ internal class AndroidMultipartStaging(private val context: Context, private val
                 FileOutputStream(output).use { sink ->
                     val result = if(job.zone == OriginalZone.GALLERY) {
                         val source = cold(); val expected = source.proof!!; require(expected.originalSha256 == passport.sha && expected.originalBytes == passport.bytes)
-                        if(source.transport == OriginalTransport.SINGLE) fromSingle(source, part.offset, part.bytes) {
+                        if(localColdAvailable(source))encodeLocalPart(source,part,passport,sink)
+                        else if(source.transport == OriginalTransport.SINGLE) fromSingle(source, part.offset, part.bytes) {
                             Pos2.write(it, sink, job.name, job.mime, part.bytes, part.bytes, times = passport.times)
                         } else {
                             val bytes = coldPart(source, part.index)

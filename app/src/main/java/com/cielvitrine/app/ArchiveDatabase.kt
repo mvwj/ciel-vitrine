@@ -160,8 +160,12 @@ internal class ArchiveStore(context: Context, internal val directory: File = con
         load(group.galleryIds.single())
     }
     fun next(): ArchiveJob? = synchronized(guard) {
-        db.rawQuery("SELECT id FROM jobs WHERE deferred=0 AND phase IN ('QUEUED','PREPARED','UPLOAD_UNCERTAIN') ORDER BY CASE phase WHEN 'UPLOAD_UNCERTAIN' THEN 0 WHEN 'PREPARED' THEN 1 ELSE 2 END,rowid LIMIT 1", null)
+        db.rawQuery("SELECT id FROM jobs WHERE deferred=0 AND phase IN ('QUEUED','PREPARED','UPLOAD_UNCERTAIN') ORDER BY CASE phase WHEN 'UPLOAD_UNCERTAIN' THEN 0 WHEN 'PREPARED' THEN 1 ELSE 2 END,CASE WHEN rowid>COALESCE((SELECT value FROM controls WHERE key='queue-cursor'),0) THEN 0 ELSE 1 END,rowid LIMIT 1", null)
             .use { c -> if (c.moveToFirst()) load(c.getString(0)) else null }
+    }
+    /** Only a completed/interrupted engine step advances fairness. Status reads never rotate work. */
+    fun yieldAfterStep(id:String)=synchronized(guard) {
+        db.execSQL("INSERT OR REPLACE INTO controls(key,value) SELECT 'queue-cursor',rowid FROM jobs WHERE id=?",arrayOf(id))
     }
     fun upgradeSizeOnlyRows() { transaction {
         val ids = db.rawQuery("SELECT id FROM jobs WHERE phase='UNSUPPORTED_SIZE'",null).use { c -> buildList { while(c.moveToNext())add(c.getString(0)) } }
