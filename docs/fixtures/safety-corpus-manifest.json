@@ -6,7 +6,7 @@
       "mime": "image/jpeg",
       "kind": "image",
       "bytes": 1775,
-      "sha256": "93c618be48c296ad5c7f60c4c2cb1f2a99aa267fbf0e7c291f1113904b1e198e",
+      "sha256": "ee70b8589c2eb55fe8160c874bc4e507b4c21947ead8245cbff2adf8050ef7d7",
       "width": 128,
       "height": 96,
       "orientation": 1
@@ -16,7 +16,7 @@
       "mime": "image/jpeg",
       "kind": "image",
       "bytes": 1775,
-      "sha256": "e207c1f8d6c5d4057635fb5dac1dc53feede3af317445c9c1694d326607a3c14",
+      "sha256": "35f8dbc47e3737e153e143041a55433867c0cf81f8ced3888cd70d82126ca016",
       "width": 96,
       "height": 128,
       "orientation": 6
@@ -26,7 +26,7 @@
       "mime": "image/jpeg",
       "kind": "image",
       "bytes": 1775,
-      "sha256": "6b8c5474c5866508a68209fba7994bd532280f16e0e79b58aaaa5d7d6cf13c0b",
+      "sha256": "a64704b76b96255dc592bfe999c4c362b9d9f4a26f94f809d90601178dab7455",
       "width": 96,
       "height": 128,
       "orientation": 8
@@ -35,8 +35,8 @@
       "name": "alpha.png",
       "mime": "image/png",
       "kind": "image",
-      "bytes": 715,
-      "sha256": "6453d4ffab0ee979afcbbc7046a1d524b40ef1df609d7e4af67337f55f5fff6b",
+      "bytes": 716,
+      "sha256": "0ed494fbf7cbd9db27291dd6b4e18268a344cb8132002bbdd6dcda004b05f4ef",
       "width": 128,
       "height": 96,
       "alpha": true
@@ -84,7 +84,7 @@
       "mime": "image/avif",
       "kind": "image",
       "bytes": 1037,
-      "sha256": "c09606ff35e7fed5eb513a011644e2db85f6d15b2069f99eb9c522c17ce4df82",
+      "sha256": "aa14711fc25c89b0f0b2bcc5af968788982b996f1532bd19e598943ef9b5b1d7",
       "width": 128,
       "height": 96
     },
@@ -93,7 +93,7 @@
       "mime": "image/heic",
       "kind": "image",
       "bytes": 1352,
-      "sha256": "12e9f1212112e0211daaaf5da8a1c1ac50b4e0cd99e20d428b71fc9bf2ee15a8",
+      "sha256": "199ae529577020666f576de32f10a30ea3263ab26dbfb0de7036a4999b94bc8b",
       "width": 128,
       "height": 96
     },
@@ -102,7 +102,7 @@
       "mime": "image/tiff",
       "kind": "archive-only",
       "bytes": 1650,
-      "sha256": "0af50b748a5f607fd46bdd7f152e20917d48906ffc1007455f065a11b0755ea8"
+      "sha256": "f57de92f744ad46841f60f3fb5019ec1d5a82064e9fbe4de27f0f9cbe84fd7dd"
     },
     {
       "name": "h264.mp4",
