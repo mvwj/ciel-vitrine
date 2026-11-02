@@ -193,7 +193,7 @@ class OwnedCloudBenchmarkAndroidTest {
                         previewSha=hash,setId=ArchiveStore.randomId(),checkedAt=null,notice=null))
                     // Exercise the real release gate without launching its prompt. This harness
                     // owns this exact row and may remove it; no user row is passed to delete().
-                    LocalRelease(context).prepare(listOf(id))
+                    LocalRelease(context,allowUnvalidatedRecoveryForOwnedTest=true).prepare(listOf(id))
                     require(android.content.ContentUris.parseId(uri)==cold.sourceStamp!!.mediaId)
                     assertEquals(1,context.contentResolver.delete(uri,null,null))
                     LocalRelease(context).result(listOf(id),true)

@@ -310,7 +310,7 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
                     item { ZoneCard("01", "Холодный архив", "Точные исходные файлы. Отдельный жизненный цикл, восстановление без личного ключа.", Icons.Outlined.Inventory2) }
                     item { ZoneCard("02", "Рабочая галерея", "Отдельная копия оригинала для просмотра. Холодный архив сохраняется независимо.", Icons.Outlined.PhotoLibrary) }
                     val readyPlans=archive.plans.filter{it.stage in setOf(ProtectionStage.READY,ProtectionStage.ANDROID_REQUESTED) && ProtectionRules.setReady(it,archive.plans)}.take(32)
-                    if(readyPlans.isNotEmpty())item { Button(enabled=!archive.busy,onClick={releaseLocal(readyPlans.map{it.coldId})},modifier=Modifier.padding(horizontal=16.dp).fillMaxWidth()) {
+                    if(readyPlans.isNotEmpty())item { Button(enabled=LocalRelease.RECOVERY_RELEASE_VALIDATED && !archive.busy,onClick={releaseLocal(readyPlans.map{it.coldId})},modifier=Modifier.padding(horizontal=16.dp).fillMaxWidth()) {
                         Text("Освободить место · ${readyPlans.size} файлов")
                     } }
                     archive.plans.filter{it.mode==SaveMode.FREE_LOCAL || it.stage==ProtectionStage.ERROR}.take(32).forEach { plan ->
@@ -403,8 +403,8 @@ private fun GalleryApp(model: GalleryModel = viewModel(), cloudModel: YandexClou
             Text("Сначала создадим холодный архив, затем отдельную рабочую копию. Оригиналы не пересжимаются.")
             Button(onClick={saveMode=SaveMode.KEEP_LOCAL;saveDialog=false;pendingSelected=true;originalPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)},modifier=Modifier.fillMaxWidth()){Text("Загрузить и оставить на телефоне")}
             Row(verticalAlignment=Alignment.CenterVertically){Checkbox(completeSet,{completeSet=it});Text("Выбраны все части снимков, включая отдельные видео Live Photo и сопутствующие файлы",style=MaterialTheme.typography.bodySmall)}
-            OutlinedButton(enabled=completeSet && Build.VERSION.SDK_INT>=30,onClick={saveMode=SaveMode.FREE_LOCAL;autoReleaseAttempted=emptyList();saveDialog=false;pendingSelected=true;originalPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)},modifier=Modifier.fillMaxWidth()){Text("Загрузить и освободить место")}
-            Text("На телефоне останутся миниатюры. Когда все проверки закончатся, открытая галерея покажет подтверждение Android. Отменённое удаление можно повторить на вкладке «Облако». Для форматов без проверенного просмотра удаление заблокировано.",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton(enabled=LocalRelease.RECOVERY_RELEASE_VALIDATED && completeSet && Build.VERSION.SDK_INT>=30,onClick={saveMode=SaveMode.FREE_LOCAL;autoReleaseAttempted=emptyList();saveDialog=false;pendingSelected=true;originalPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)},modifier=Modifier.fillMaxWidth()){Text("Загрузить и освободить место")}
+            Text("Освобождение временно недоступно: проверяем восстановление галереи после потери устройства. Загрузка с сохранением оригиналов доступна.",style=MaterialTheme.typography.bodySmall)
         }},confirmButton={TextButton(onClick={saveDialog=false}){Text("Закрыть")}})
     if (addAlbum) {
         var name by remember { mutableStateOf("") }

@@ -19,8 +19,12 @@ internal class LocalRelease(private val context:Context,
         val session=YandexSessionStore(context).load() ?: error("Подключите прежний аккаунт Яндекса")
         require(session.uid==job.uid && session.appRootId==job.rootId)
         YandexArchiveCloud(context,session)
-    }) {
+    },
+    // Explicit injection for synthetic instrumentation fixtures, never a user preference.
+    private val allowUnvalidatedRecoveryForOwnedTest:Boolean=false) {
     fun prepare(ids:List<String>):android.app.PendingIntent {
+        if(!allowUnvalidatedRecoveryForOwnedTest || !BuildConfig.DEBUG)
+            throw ReleaseNotReady("Освобождение временно недоступно: восстановление галереи после потери устройства ещё проверяется. Можно загрузить файлы, оставив оригиналы на телефоне.")
         if(Build.VERSION.SDK_INT<30)error("Освобождение места требует Android 11")
         require(ids.isNotEmpty() && ids.size<=32 && ids.distinct().size==ids.size)
         return openStore().use { store ->
@@ -123,6 +127,7 @@ internal class LocalRelease(private val context:Context,
         }
     }
     companion object {
+        const val RECOVERY_RELEASE_VALIDATED=false
         internal fun verifyLocal(context:Context,job:ArchiveJob,binding:String) {
             val inventory=MediaInventory(context);inventory.requireUnchanged(job)
             require(currentMediaBinding(context,Uri.parse(job.source))==binding)

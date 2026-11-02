@@ -110,7 +110,7 @@ import androidx.compose.ui.unit.dp
                 ProtectionStage.ARCHIVING->"1 из 3 · Холодный архив"
                 ProtectionStage.WORKING_COPY->"2 из 3 · Рабочая копия"
                 ProtectionStage.PREVIEW->"3 из 3 · Просмотр из облака"
-                ProtectionStage.READY,ProtectionStage.ANDROID_REQUESTED->"Готово к освобождению места"
+                ProtectionStage.READY,ProtectionStage.ANDROID_REQUESTED->if(LocalRelease.RECOVERY_RELEASE_VALIDATED)"Готово к освобождению места" else "Сохранено; освобождение пока недоступно"
                 ProtectionStage.LOCAL_REMOVED->"Оригинал на телефоне удалён"
                 ProtectionStage.SAVED->"Сохранено в двух зонах облака"
                 ProtectionStage.ERROR->"Подготовка остановлена"
@@ -122,7 +122,7 @@ import androidx.compose.ui.unit.dp
                 else->"Исходник остаётся на телефоне до завершения всех проверок."
             },style=MaterialTheme.typography.bodySmall)
             if(plan.stage in setOf(ProtectionStage.READY,ProtectionStage.ANDROID_REQUESTED))
-                Button(onClick=release,enabled=!busy && setReady){Text("Освободить место на телефоне")}
+                Button(onClick=release,enabled=LocalRelease.RECOVERY_RELEASE_VALIDATED && !busy && setReady){Text("Освободить место на телефоне")}
             if(plan.stage==ProtectionStage.ERROR)OutlinedButton(onClick=retry,enabled=!busy){Text("Повторить")}
         }
     }

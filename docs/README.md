@@ -7,6 +7,7 @@ original scope and are not statements about the current version.
 
 ## Start here
 
+- [Current repair plan and acceptance criteria — 2 November 2026](REPAIR_PLAN_2026_11_02_RU.md)
 - [Architecture and module map](ARCHITECTURE.md)
 - [Yandex OAuth setup](YANDEX_SETUP_RU.md)
 - [Requirements and development plan](DEVELOPMENT_PLAN_RU.md)

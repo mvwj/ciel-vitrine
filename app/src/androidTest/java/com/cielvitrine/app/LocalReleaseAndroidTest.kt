@@ -68,7 +68,7 @@ class LocalReleaseAndroidTest {
             override fun <T> readback(path:String,read:(InputStream)->T):T {reads+=path;return objects.getValue(path).inputStream().use(read)}
         }
         fun store()=ArchiveStore(context,directory,alias)
-        val release=LocalRelease(context,{store()},{cloud})
+        val release=LocalRelease(context,{store()},{cloud},allowUnvalidatedRecoveryForOwnedTest=true)
         init {
             val bitmap=Bitmap.createBitmap(64,48,Bitmap.Config.ARGB_8888).apply{eraseColor(android.graphics.Color.GREEN)}
             context.contentResolver.openOutputStream(inserted,"w")!!.use{assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG,100,it))};bitmap.recycle()

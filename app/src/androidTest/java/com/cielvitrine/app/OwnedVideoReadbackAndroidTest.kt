@@ -74,7 +74,7 @@ class OwnedVideoReadbackAndroidTest {
         val args=InstrumentationRegistry.getArguments()
         assumeTrue("Requires owned_video_readback=true",args.getString("owned_video_readback")=="true")
         val phase=args.getString("phase","play")
-        require(phase in listOf("play","readback","rendition_1080","rendition_720"))
+        require(phase in listOf("play","readback","export","rendition_1080","rendition_720"))
         val fixture=args.getString("fixture","video")
         val original=working(fixture)
         val requested=when(args.getString("quality")){"1080"->VideoQuality.P1080;"720"->VideoQuality.P720;else->VideoQuality.ORIGINAL}
@@ -84,10 +84,71 @@ class OwnedVideoReadbackAndroidTest {
         val meter=Meter(YandexArchiveCloud(context,YandexSessionStore(context).load()!!))
         val before=files();val session=MultipartSession(context,job,meter,clearOnClose=true)
         val showing=mutableStateOf(false);var player:ExoPlayer?=null;var sessionClosed=false
+        var queuePause:BenchmarkQueuePause?=null
         compose.runOnUiThread{compose.activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)}
         try {
+            queuePause=BenchmarkQueuePause.open(context)
             save(report.put("stage","opening"))
-            if(phase.startsWith("rendition_")) {
+            if(phase=="export") {
+                require(fixture=="video" && requested==VideoQuality.ORIGINAL)
+                require(proof.originalSha256=="107383fd8921a882181c07ae494a57a828a091f52c414540e0314727e38ac129")
+                compose.setContent{Text("Скачиваем контейнеры публичного тестового видео для независимого восстановления.")}
+                val exportName=args.getString("export_resume") ?: System.currentTimeMillis().toString()
+                require(exportName.matches(Regex("[0-9]{1,20}")))
+                val folder=File(context.filesDir,"owned-video-export/"+exportName)
+                check((folder.isDirectory || folder.mkdirs()) && folder.usableSpace>256L*1024*1024)
+                save(report.put("export_directory",folder.name))
+                val deadline=SystemClock.elapsedRealtime()+30*60_000L
+                fun fetch(ref:MultipartObject):File {
+                    ref.validate()
+                    val destination=File(folder,ref.id+ref.extension.suffix)
+                    if(destination.exists()){
+                        val cached=MessageDigest.getInstance("SHA-256")
+                        destination.inputStream().use{input->val buffer=ByteArray(65536);while(true){val n=input.read(buffer);if(n<0)break;cached.update(buffer,0,n)}}
+                        if(destination.length()==ref.proof.containerBytes && cached.digest().joinToString(""){"%02x".format(it)}==ref.proof.containerSha256)
+                            return destination
+                        check(destination.delete()) // Only a named fixture export; never a MediaStore source.
+                    }
+                    val path=ref.path(job.zone)
+                    val beforeRemote=requireNotNull(meter.inspect(path))
+                    require(beforeRemote.id==ref.remote.id && beforeRemote.modified==ref.remote.modified && beforeRemote.bytes==ref.proof.containerBytes)
+                    var count=0L;val hash=MessageDigest.getInstance("SHA-256")
+                    meter.readback(path){input->java.io.FileOutputStream(destination).use{out->
+                        val buffer=ByteArray(65536)
+                        while(true){
+                            check(SystemClock.elapsedRealtime()<deadline){"Export deadline exceeded"}
+                            val n=input.read(buffer);if(n<0)break
+                            require(n>0 && n<=ref.proof.containerBytes-count)
+                            out.write(buffer,0,n);hash.update(buffer,0,n);count+=n
+                        }
+                        out.fd.sync()
+                    }}
+                    require(count==ref.proof.containerBytes && hash.digest().joinToString(""){"%02x".format(it)}==ref.proof.containerSha256)
+                    require(meter.inspect(path)==beforeRemote)
+                    return destination
+                }
+                val rootProof=requireNotNull(job.multipart).root
+                val rootRef=MultipartObject(job.id,rootProof,ArchiveRemote(job.remoteId!!,job.remoteModified!!,rootProof.containerBytes,rootProof.containerSha256),job.containerExtension)
+                val rootFile=fetch(rootRef)
+                val plain=java.io.ByteArrayOutputStream()
+                rootFile.inputStream().use{MultipartFormat.decodeObject(rootRef,it,plain)}
+                val root=MultipartFormat.root(plain.toByteArray())
+                require(root.job==job.id && root.passport.sha==proof.originalSha256 && root.passport.bytes==proof.originalBytes)
+                var pageRef:MultipartObject?=root.lastPage;var pageIndex=root.pages-1;var parts=0
+                while(pageRef!=null){
+                    val page=MultipartFormat.readPage(pageRef,root){fetch(it).inputStream()}
+                    require(page.index==pageIndex--)
+                    page.parts.forEach{
+                        fetch(it.objectRef);parts++
+                        save(report.put("stage","exporting").put("exported_parts",parts))
+                    }
+                    pageRef=page.previous
+                }
+                require(pageIndex == -1L && parts.toLong()==root.passport.parts)
+                report.put("export_directory",folder.name).put("root_file",rootFile.name)
+                    .put("exported_parts",parts).put("expected_sha256",proof.originalSha256)
+                    .put("independent_recovery_pending",true)
+            } else if(phase.startsWith("rendition_")) {
                 require(fixture=="clip")
                 compose.setContent{Text("Проверка качества отдельного короткого 4K ролика. Исходники сохранены.")}
                 val quality=if(phase=="rendition_1080")VideoQuality.P1080 else VideoQuality.P720
@@ -96,7 +157,7 @@ class OwnedVideoReadbackAndroidTest {
                 var prepared:VideoViewRequest?=null;val deadline=SystemClock.elapsedRealtime()+240_000
                 while(SystemClock.elapsedRealtime()<deadline) {
                     val row=VideoViewStore(context,original).load(quality)!!
-                    save(report.put("stage",row.job.phase.name).put("deferred",row.job.deferred))
+                    save(report.put("stage",row.job.phase.name).put("deferred",row.job.deferred).put("notice",row.job.notice ?: JSONObject.NULL))
                     check(!row.job.deferred){"Rendition preparation stopped"}
                     if(row.job.phase==ArchivePhase.VERIFIED){prepared=row;break}
                     Thread.sleep(500)
@@ -193,7 +254,7 @@ class OwnedVideoReadbackAndroidTest {
         } catch(error:Exception){report.put("error_type",error.javaClass.simpleName);throw error}
         finally {
             compose.runOnUiThread{player?.release();player=null;showing.value=false}
-            if(!sessionClosed)session.close();save(report)
+            try{if(!sessionClosed)session.close();save(report)}finally{queuePause?.close()}
         }
     }
 }

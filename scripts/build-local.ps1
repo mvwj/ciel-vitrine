@@ -20,5 +20,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Independent decoder checks failed' }
         & $env:POS2_PYTHON scripts/test_pos2_fixtures.py
         if ($LASTEXITCODE -ne 0) { throw 'Independent AES decoder checks failed' }
+        & $env:POS2_PYTHON scripts/record-build.py --apk app/build/outputs/apk/debug/app-debug.apk
+        if ($LASTEXITCODE -ne 0) { throw 'Build receipt failed' }
     } finally { Pop-Location }
 } finally { $env:JAVA_TOOL_OPTIONS = $priorJavaOptions; $env:POS2_PYTHON = $priorPosPython }

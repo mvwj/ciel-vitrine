@@ -16,8 +16,10 @@ from your own cloud storage. Yandex Disk is the first integration; one provider
 is connected at a time. Google Drive is planned.
 
 **Development preview.** Recovery, viewing and removal have different checks.
+Device-space release is temporarily disabled pending clean-install catalog
+recovery validation; uploads keep phone originals.
 Keep an independent backup while testing. Current work and limits are recorded
-in [the development plan](docs/DEVELOPMENT_PLAN_RU.md) and
+in [the repair plan](docs/REPAIR_PLAN_2026_11_02_RU.md) and
 [validation reports](docs/README.md#validation).
 
 ## What it does

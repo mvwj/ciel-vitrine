@@ -55,4 +55,14 @@ class VideoInfoAdmissionTest {
         assertNotNull(VideoTranscoder.preparationProblem(source.copy(otherTracks=1),1080))
         assertNotNull(VideoTranscoder.preparationProblem(source,4320))
     }
+    @Test fun matchesTrackIdentityAcrossMuxOrderAndAccountsForDeclaredAacPriming() {
+        val original=source.copy(firstSamplesUs=listOf(49000,0),trackTiming=listOf(
+            VideoTrackTiming("video/avc",49000),VideoTrackTiming("audio/mpeg",0,sampleRate=48000)))
+        val converted=original.copy(width=1920,height=1080,firstSamplesUs=listOf(-12000,0),trackTiming=listOf(
+            VideoTrackTiming("audio/mp4a-latm",-12000,1600,sampleRate=48000),VideoTrackTiming("video/avc",0)))
+        converted.requireDerivative(original,1080)
+        assertThrows(IllegalArgumentException::class.java){converted.copy(trackTiming=converted.trackTiming.map{if(it.mime.startsWith("audio/"))it.copy(encoderDelayFrames=0) else it}).requireDerivative(original,1080)}
+        assertThrows(IllegalArgumentException::class.java){converted.copy(trackTiming=converted.trackTiming.map{if(it.mime.startsWith("audio/"))it.copy(firstUs=1_000_000) else it}).requireDerivative(original,1080)}
+        assertThrows(IllegalArgumentException::class.java){converted.copy(trackTiming=converted.trackTiming.drop(1)).requireDerivative(original,1080)}
+    }
 }

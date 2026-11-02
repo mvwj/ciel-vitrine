@@ -36,7 +36,14 @@ object PortableFiles {
             val name = if (source.scheme == "file") File(source.path!!).name else resolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
                 if (c.moveToFirst()) c.getString(0) else null
             } ?: "original.bin"
-            val mime = resolver.getType(source) ?: if (source.scheme == "file")
+            // Some Android MimeTypeMap versions label M4A as audio/mpeg. Confirm the MP4
+            // container before correcting that fallback; an MP3 renamed .m4a stays MPEG.
+            val m4aContainer=source.scheme=="file" && name.endsWith(".m4a",true) && openSource().use {
+                val header=ByteArray(12);var size=0
+                while(size<header.size){val n=it.read(header,size,header.size-size);if(n<=0)break;size+=n}
+                size==header.size && header.copyOfRange(4,8).contentEquals("ftyp".toByteArray(Charsets.US_ASCII))
+            }
+            val mime = if(m4aContainer)"audio/mp4" else resolver.getType(source) ?: if (source.scheme == "file")
                 android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(File(source.path!!).extension.lowercase(java.util.Locale.ROOT)) ?: "application/octet-stream"
             else "application/octet-stream"
             val written = resolver.openOutputStream(destination, "wt")!!.use { output ->

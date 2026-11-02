@@ -30,6 +30,7 @@ internal object ArchiveUserTransfer {
     private val guard=Any()
     private val active=mutableSetOf<AtomicBoolean>()
     fun running()=synchronized(guard){active.any{!it.get()}}
+    internal fun contains(token:AtomicBoolean)=synchronized(guard){token in active && !token.get()}
     internal fun started(token:AtomicBoolean)=synchronized(guard){active.add(token);ArchiveQueueEvents.changed()}
     internal fun finish(token:AtomicBoolean,done:()->Unit)=synchronized(guard){
         try{if(!token.get())done()}finally{active.remove(token);ArchiveQueueEvents.changed()}
@@ -68,7 +69,7 @@ class ArchiveUserTransferService:JobService() {
     private val executor=Executors.newFixedThreadPool(2)
     override fun onStartJob(params:JobParameters):Boolean {
         val stopped=AtomicBoolean();tasks[params]=stopped
-        setNotification(params,102,mediaForeground(this,102,"Сохраняем оригиналы в облаке").notification,JOB_END_NOTIFICATION_POLICY_REMOVE)
+        setNotification(params,103,mediaForeground(this,103,"Сохраняем оригиналы в облаке").notification,JOB_END_NOTIFICATION_POLICY_REMOVE)
         ArchiveUserTransfer.started(stopped)
         executor.execute {
             var retry=false;var finished=false

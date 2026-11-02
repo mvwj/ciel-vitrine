@@ -206,10 +206,21 @@ class VideoViewWorker(context:Context,params:WorkerParameters):CoroutineWorker(c
             return Result.success()
         } catch(e:CancellationException){throw e}
         catch(error:Exception) {
+            if(BuildConfig.DEBUG)runCatching {
+                val site=error.stackTrace.firstOrNull{it.className.startsWith("com.cielvitrine.")}
+                val row=org.json.JSONObject().put("at",System.currentTimeMillis()).put("type",error.javaClass.simpleName)
+                    .put("site",site?.className?.substringAfterLast('.') ?: "native").put("line",site?.lineNumber ?: -1)
+                    .put("causes",org.json.JSONArray(generateSequence<Throwable>(error){it.cause}.take(8).map{it.javaClass.simpleName}.toList()))
+                if(error is androidx.media3.transformer.ExportException)row.put("export_error_code",error.errorCode)
+                val file=AtomicFile(File(context.filesDir,"video-preparation-failure.json"));val out=file.startWrite()
+                try{out.write(row.toString(2).toByteArray());file.finishWrite(out)}catch(e:Exception){file.failWrite(out);throw e}
+            }
             generation?.let { expected -> if(!isStopped && store.active(quality,expected))store.updateActive(quality,expected){
                 val notice=when(error) {
                     is UnsupportedVideoPreparation -> error.message
-                    is androidx.media3.transformer.ExportException -> "Видео не подготовлено: кодек/кодер или чтение источника недоступны. Оригинал сохранён."
+                    is androidx.media3.transformer.ExportException -> if(error.errorCode==androidx.media3.transformer.ExportException.ERROR_CODE_MUXING_TIMEOUT)
+                        "Подготовка остановлена: долго нет следующих данных для контейнера. Оригинал сохранён; повторите подготовку."
+                        else "Видео не подготовлено: кодек/кодер или чтение источника недоступны. Оригинал сохранён."
                     else -> "Видео не подготовлено. Оригинал сохранён; повторите проверку."
                 }
                 it.copy(job=it.job.copy(deferred=true,notice=notice))

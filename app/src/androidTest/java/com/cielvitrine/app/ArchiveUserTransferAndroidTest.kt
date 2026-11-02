@@ -29,12 +29,12 @@ class ArchiveUserTransferAndroidTest {
         ArchiveUserTransfer.started(token)
         try {
             assertFalse(ArchiveUserTransfer.finishIfIdle(context,token,hasWork={true}){completions++})
-            assertTrue(ArchiveUserTransfer.running());assertEquals(0,completions)
+            assertTrue(ArchiveUserTransfer.contains(token));assertEquals(0,completions)
             assertTrue(ArchiveUserTransfer.finishIfIdle(context,token,hasWork={false}){completions++})
-            assertFalse(ArchiveUserTransfer.running());assertEquals(1,completions)
+            assertFalse(ArchiveUserTransfer.contains(token));assertEquals(1,completions)
             ArchiveUserTransfer.started(token);token.set(true)
             assertTrue(ArchiveUserTransfer.finishIfIdle(context,token,hasWork={fail("Stopped job queried work");false}){completions++})
-            assertFalse(ArchiveUserTransfer.running());assertEquals(1,completions)
+            assertFalse(ArchiveUserTransfer.contains(token));assertEquals(1,completions)
         }finally{token.set(true);ArchiveUserTransfer.finish(token){}}
     }
 }
