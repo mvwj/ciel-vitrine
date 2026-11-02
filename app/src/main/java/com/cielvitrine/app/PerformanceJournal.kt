@@ -68,6 +68,7 @@ internal class PerformanceJournal(private val context: Context,
     companion object {
         private val guard = Any()
         val stages = setOf("scan", "encrypt", "prepare", "upload", "verify", "download", "restore", "open_first_frame", "image_decode", "zoom_decode", "zoom_first_frame", "cache_read", "queue_wait", "video_download", "video_cache", "video_first_frame", "video_seek_frame", "video_transcode",
-            "tile_prepare","tile_upload","tile_verify","tile_source_download","tile_download","tile_decode","tile_cache","cloud_first_frame","cloud_zoom_frame")
+            "tile_prepare","tile_upload","tile_verify","tile_source_download","tile_download","tile_decode","tile_cache","cloud_first_frame","cloud_zoom_frame")+
+            setOf("http_upload_link","http_upload_body","http_upload_request").flatMap{listOf(it,"tile_$it","rendition_$it")}
     }
 }

@@ -32,7 +32,7 @@ class VerifiedMultipartReader(private val job: ArchiveJob, private val cloud: Ar
         require(proof.originalBytes <= MultipartFormat.MANIFEST_MAX_BYTES && proof.containerBytes <= MultipartFormat.MANIFEST_MAX_BYTES + 262144)
         val remote = cloud.inspect(job.path) ?: error("Root unavailable")
         require(remote.id == job.remoteId && remote.modified == job.remoteModified)
-        val ref = MultipartObject(job.id, proof, remote).also { it.validate() }
+        val ref = MultipartObject(job.id, proof, remote,job.containerExtension).also { it.validate() }
         return decode(ref) { bytes, _ -> MultipartFormat.root(bytes) }.also { r ->
             val expected = job.proof!!
             require(r.job == job.id && r.name == job.name && r.mime == job.mime && r.zone == job.zone &&

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.channels.Channel
 
 data class ArchiveUiState(val jobs: List<ArchiveJob> = emptyList(), val counts: ArchiveCounts = ArchiveCounts(emptyMap(), 0, 0),
     val batches: List<ArchiveBatch> = emptyList(), val paused: Boolean = false, val hasMore: Boolean = false,
@@ -31,7 +32,7 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
     private val mutable = MutableStateFlow(ArchiveUiState())
     val state = mutable.asStateFlow()
     private var library:List<MediaItem> = emptyList()
-    private var statusJob:Job?=null
+    private val statusRequests=Channel<Unit>(Channel.CONFLATED)
     private var baseStatuses:Map<String,MediaCloudStatus> = emptyMap()
     private var jobToSource:Map<String,String> = emptyMap()
     private fun publishActivity() {
@@ -44,15 +45,16 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
         mutable.value=mutable.value.copy(mediaStatus=statuses)
     }
     fun libraryChanged(items:List<MediaItem>){library=items;refreshStatuses()}
-    private fun refreshStatuses() {
-        statusJob?.cancel()
-        statusJob=viewModelScope.launch {
+    private fun refreshStatuses() {statusRequests.trySend(Unit)}
+    private suspend fun rebuildStatuses() {
+            val started=android.os.SystemClock.elapsedRealtime()
             val snapshot=library
             try {
                 val result=withContext(Dispatchers.IO) {
                     val plans=store.protections();val paused=store.paused()
                     val session=YandexSessionStore(context).load()
-                    val jobs=store.forSources(snapshot.map{it.uri.toString()}).groupBy{it.source}
+                    val statusContext=currentCoroutineContext()
+                    val jobs=store.forSources(snapshot.map{it.uri.toString()}){statusContext.ensureActive()}.groupBy{it.source}
                     val byJob=mutableMapOf<String,String>()
                     val statuses=snapshot.associate { item ->
                         val matches=jobs[item.uri.toString()].orEmpty().filter{it.zone==OriginalZone.COLD && it.matches(item)}
@@ -78,13 +80,16 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
                 baseStatuses=result.statuses;jobToSource=result.sourcesByJob
                 mutable.value=mutable.value.copy(plans=result.plans,remoteMedia=result.remote)
                 publishActivity()
+                context.getSharedPreferences("cloud-status-metrics",0).edit()
+                    .putLong("rebuild_ms",android.os.SystemClock.elapsedRealtime()-started).putInt("items",snapshot.size).apply()
             }catch(e:CancellationException){throw e}catch(_:Exception){
                 baseStatuses=snapshot.associate{it.uri.toString() to MediaCloudStatus(CloudMark.UNKNOWN,"Статус недоступен","Не удалось прочитать журнал")}
                 jobToSource=emptyMap();publishActivity()
             }
-        }
     }
-    init { viewModelScope.launch {WorkManager.getInstance(context).getWorkInfosByTagFlow("gallery-tiles").collect{refresh()}}
+    init { viewModelScope.launch {for(request in statusRequests)rebuildStatuses()}
+        viewModelScope.launch {ArchiveQueueEvents.revision.collect{delay(500);refresh()}}
+        viewModelScope.launch {WorkManager.getInstance(context).getWorkInfosByTagFlow("gallery-tiles").collect{refresh()}}
         viewModelScope.launch {WorkManager.getInstance(context).getWorkInfosByTagFlow("protection-plans").collect{refresh()}}
         viewModelScope.launch {TransferActivity.state.collect { delay(150);publishActivity() }}
         viewModelScope.launch {
@@ -99,6 +104,7 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
             val updated = withContext(Dispatchers.IO) {
                 val rows = store.page(31, cursor)
                 val jobs=rows.take(30).map { it.second }
+                if(BuildConfig.DEBUG)runCatching{exportSelectedDiagnostics()}
                 rows.take(30).lastOrNull()?.first to ArchiveUiState(jobs, store.counts(), store.batches(), store.paused(), rows.size > 30,
                     olderPage = cursor != null,tiles=jobs.filter{it.phase==ArchivePhase.VERIFIED && it.mime.startsWith("image/")}.associate{it.id to TileStore(context).status(it.id,it.mime)},benchmarkIds=benchmarkIds)
             }
@@ -110,11 +116,34 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { mutable.value = mutable.value.copy(message = "Не удалось прочитать журнал. Исходные файлы сохранены.") }
     }
-    private suspend fun kick() = withContext(Dispatchers.IO) {
+    /** Debug-only private snapshot. Reading it never restarts workers or exposes credentials/media paths. */
+    private fun exportSelectedDiagnostics() {
+        val rows=org.json.JSONArray();val measured=mutableSetOf<String>()
+        benchmarkIds.sorted().forEachIndexed { index,id ->
+            if(!store.contains(id))return@forEachIndexed
+            measured+=id
+            val cold=store.load(id);val plan=store.protection(id);val working=plan?.workingId?.let(store::load)
+            working?.let{measured+=it.id}
+            val row=org.json.JSONObject().put("index",index+1).put("kind",if(cold.mime.startsWith("video/"))"video" else "photo")
+                .put("bytes",cold.sourceBytes).put("cold",cold.phase.name).put("deferred",cold.deferred || working?.deferred==true)
+                .put("notice",plan?.notice ?: cold.notice ?: working?.notice ?: org.json.JSONObject.NULL)
+                .put("working",working?.phase?.name ?: org.json.JSONObject.NULL).put("stage",plan?.stage?.name ?: org.json.JSONObject.NULL)
+                .put("tiles_ready",working?.let{TileStore(context).load(it.id)?.ready} ?: false)
+            if(cold.transport==OriginalTransport.MULTIPART)AndroidMultipartStore(context,cold).state()?.let{row.put("cold_parts",it.nextPart).put("parts_total",it.passport.parts)}
+            if(working?.transport==OriginalTransport.MULTIPART)AndroidMultipartStore(context,working).state()?.let{row.put("working_parts",it.nextPart)}
+            rows.put(row)
+        }
+        val result=org.json.JSONObject().put("at",System.currentTimeMillis()).put("rows",rows)
+            .put("queue_notice",context.getSharedPreferences("archive-queue-state",0).getString("error",null) ?: org.json.JSONObject.NULL)
+            .put("measurements",PerformanceJournal(context).snapshot(ids=measured.take(240).toSet()))
+        val file=android.util.AtomicFile(java.io.File(context.filesDir,"queue-check-summary.json"));val out=file.startWrite()
+        try{out.write(result.toString(2).toByteArray());file.finishWrite(out)}catch(e:Exception){file.failWrite(out);throw e}
+    }
+    private suspend fun kick(userInitiated:Boolean=false) = withContext(Dispatchers.IO) {
         store.upgradeSizeOnlyRows()
         if (!store.paused()) {
             store.batches().filter { it.phase == ScanPhase.DISCOVERING }.forEach { ArchiveScanWorker.enqueue(context, it.id) }
-            if (store.next() != null) ArchiveWorker.enqueue(context)
+            if (store.next() != null) ArchiveWorker.enqueue(context,userInitiated)
             ProtectionWorker.enqueue(context)
         }
     }
@@ -128,7 +157,7 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
         if (mutable.value.busy) return
         mutable.value = mutable.value.copy(busy = true, message = null)
         viewModelScope.launch { operations.withLock {
-            try { withContext(Dispatchers.IO) { action() }; mutable.value = mutable.value.copy(message = message); kick(); refresh() }
+            try { withContext(Dispatchers.IO) { action() }; mutable.value = mutable.value.copy(message = message); kick(true); refresh() }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { mutable.value = mutable.value.copy(message = "Действие не завершено. Проверьте доступ к файлам и состояние очереди. Исходники сохранены.") }
             finally { mutable.value = mutable.value.copy(busy = false) }
@@ -145,7 +174,7 @@ class ArchiveModel(app: Application) : AndroidViewModel(app) {
         context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         val mime = (context.contentResolver.getType(uri) ?: "application/octet-stream").take(256)
         store.save(ArchiveJob(ArchiveStore.randomId(), null, null, uri.toString(), name,
-            mime, bytes, ArchivePhase.QUEUED, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.BIN,
+            mime, bytes, ArchivePhase.QUEUED, createdAt = System.currentTimeMillis(), containerExtension = ContainerExtension.CV2,
             transport = if(bytes == null || bytes > MAX_SINGLE_BYTES || mime.startsWith("video/")) OriginalTransport.MULTIPART else OriginalTransport.SINGLE))
     }
     fun prepareAll() = perform("Собираем все доступные фото и видео. Новые файлы после начала сканирования войдут в следующий запуск.") {

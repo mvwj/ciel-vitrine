@@ -21,9 +21,10 @@ class CloudStatusAndroidTest {
         val status=mutableStateOf(MediaCloudStatus(CloudMark.LOCAL,"На телефоне"))
         var opened:MediaCloudStatus?=null
         var photoOpened=false
+        val selecting=mutableStateOf(false);var selectedCount=0
         compose.setContent { MaterialTheme(colorScheme=GalleryColors) {
             MediaTimeline(listOf(item),Modifier.fillMaxSize(),open={photoOpened=true},cloudStatuses=mapOf(item.uri.toString() to status.value),
-                cloudDetails={_,s->opened=s},thumbnail={_,m->Box(m.background(Color.Gray))})
+                cloudDetails={_,s->opened=s},selecting=selecting.value,select={selectedCount++},thumbnail={_,m->Box(m.background(Color.Gray))})
         } }
         compose.onNodeWithTag("cloud-badge:LOCAL").assertIsDisplayed().performClick()
         compose.runOnIdle {assertEquals(CloudMark.LOCAL,opened!!.mark);assertFalse(photoOpened);status.value=MediaCloudStatus(CloudMark.UPLOADING,"Загружается",progress=.5f)}
@@ -33,5 +34,8 @@ class CloudStatusAndroidTest {
         compose.runOnIdle {assertTrue(opened!!.coldVerified);assertFalse(photoOpened)}
         compose.onNodeWithTag("media:${item.uri}").performClick()
         compose.runOnIdle {assertTrue(photoOpened)}
+        compose.runOnIdle {opened=null;selecting.value=true}
+        compose.onNodeWithTag("cloud-badge:SAVED").performClick()
+        compose.runOnIdle {assertEquals(1,selectedCount);assertNull(opened)}
     }
 }

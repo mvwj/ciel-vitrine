@@ -58,6 +58,9 @@ for name, codec, extra in [("h264.mp4","libx264",["-preset","ultrafast"]), ("hev
     command = [args.ffmpeg,"-hide_banner","-loglevel","error","-y","-f","lavfi","-i","testsrc2=size=160x96:rate=12","-t","1","-an","-c:v",codec,"-threads","1","-pix_fmt","yuv420p",*extra,"-movflags","+faststart",str(target/name)]
     subprocess.run(command,check=True,timeout=90)
     add(name,"video/mp4",kind="video",width=160,height=96)
+subprocess.run([args.ffmpeg,"-hide_banner","-loglevel","error","-y","-f","lavfi","-i","sine=frequency=440:sample_rate=48000",
+    "-t","0.3","-ac","2","-c:a","aac","-metadata:s:a:0","language=fra",str(target/"muxer-audio.m4a")],check=True,timeout=30)
+add("muxer-audio.m4a","audio/mp4",kind="archive-only")
 manifest = dict(generator="Ciel Vitrine owned synthetic corpus", fixtures=rows)
 (target/"manifest.json").write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
 (root/"docs/fixtures/safety-corpus-manifest.json").write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")

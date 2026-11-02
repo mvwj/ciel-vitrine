@@ -8,6 +8,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.Mac
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /** Small device-bound payloads, independent from public original-container keys and OAuth key. */
 internal class DeviceCipher(private val alias: String, private val domain: String, private val maximumPlainBytes: Int = 262144) {
@@ -16,6 +17,19 @@ internal class DeviceCipher(private val alias: String, private val domain: Strin
     private var cachedIndex: SecretKey? = null
     private var mayCreate = true
     private var mayCreateIndex = true
+    private var lookupKey: SecretKey? = null
+    private fun hex(bytes:ByteArray):String {
+        val digits="0123456789abcdef";val out=CharArray(bytes.size*2)
+        bytes.forEachIndexed{i,b->val n=b.toInt() and 255;out[i*2]=digits[n ushr 4];out[i*2+1]=digits[n and 15]}
+        return String(out)
+    }
+    /** Derive a domain-separated lookup key once. Never export the hardware key or persist this key. */
+    @Synchronized fun fastIndex(identity:String):String {
+        val key=lookupKey ?: index("fast-source-index-key-v1").chunked(2).map{it.toInt(16).toByte()}.toByteArray().let { bytes ->
+            try{SecretKeySpec(bytes,"HmacSHA256").also{lookupKey=it}}finally{bytes.fill(0)}
+        }
+        return Mac.getInstance("HmacSHA256").run{init(key);hex(doFinal("$domain:fast-index-v1:$identity".toByteArray()))}
+    }
     @Synchronized fun requireExisting() { cachedKey = existing() ?: error("Private database key missing"); mayCreate = false }
     @Synchronized fun requireExistingIndex() { cachedIndex = keys.getKey("$alias.index", null) as? SecretKey ?: error("Private index key missing"); mayCreateIndex = false }
     private fun existing() = keys.getKey(alias, null) as? SecretKey
@@ -46,6 +60,6 @@ internal class DeviceCipher(private val alias: String, private val domain: Strin
                 init(KeyGenParameterSpec.Builder(indexAlias, KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY)
                     .setKeySize(256).setDigests(KeyProperties.DIGEST_SHA256).build())
             }.generateKey() else error("Private index key missing")).also { cachedIndex = it; mayCreateIndex = false }
-        return Mac.getInstance("HmacSHA256").run { init(key); doFinal("$domain:index:$identity".toByteArray()).joinToString("") { "%02x".format(it) } }
+        return Mac.getInstance("HmacSHA256").run { init(key); hex(doFinal("$domain:index:$identity".toByteArray())) }
     }
 }

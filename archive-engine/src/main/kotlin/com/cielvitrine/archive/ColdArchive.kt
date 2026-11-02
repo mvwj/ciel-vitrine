@@ -50,7 +50,6 @@ import java.io.OutputStream
             require(it.root.originalBytes in 1..MultipartFormat.MANIFEST_MAX_BYTES && it.root.containerBytes in 1..MultipartFormat.MANIFEST_MAX_BYTES + 262144)
             require(it.root.bundleId == proof.bundleId && it.root.containerSha256 == proof.containerSha256 && it.root.containerBytes == proof.containerBytes)
         }
-        if(transport == OriginalTransport.MULTIPART) require(containerExtension == ContainerExtension.BIN)
         if(transport == OriginalTransport.MULTIPART && phase == ArchivePhase.VERIFIED) require(multipart != null)
     }
 }

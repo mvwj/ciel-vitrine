@@ -16,8 +16,10 @@ from your own cloud storage. Yandex Disk is the first integration; one provider
 is connected at a time. Google Drive is planned.
 
 **Development preview.** Recovery, viewing and removal have different checks.
+Device-space release is temporarily disabled pending clean-install catalog
+recovery validation; uploads keep phone originals.
 Keep an independent backup while testing. Current work and limits are recorded
-in [the development plan](docs/DEVELOPMENT_PLAN_RU.md) and
+in [the repair plan](docs/REPAIR_PLAN_2026_11_02_RU.md) and
 [validation reports](docs/README.md#validation).
 
 ## What it does
@@ -60,7 +62,7 @@ external edit while its confirmation dialog is open. See
 **The recovery key is included in each original container.** AES-GCM protects
 the container structure, but a cloud provider or anyone with that file can
 recover its original bytes and EXIF/GPS. This design favors recovery without a
-separate key; it does not provide secrecy from the provider. A `.bin` extension
+separate key; it does not provide secrecy from the provider. A `.bin` or `.cv2` extension
 does not change that property.
 
 OAuth tokens and device catalogs use separate Android Keystore protection.

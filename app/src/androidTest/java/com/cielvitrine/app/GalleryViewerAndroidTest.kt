@@ -43,6 +43,7 @@ class GalleryViewerAndroidTest {
     }
     @Test fun localUnsyncedPhotoDecodesItsOriginalDimensionsAndZoomUsesFullResolutionRegion() {
         val file=File(context.cacheDir,"full-photo-${UUID.randomUUID()}.png")
+        compose.waitUntil(10_000){ViewerRuntime.imageBudget.used()==0L}
         try{image(file,Color.GREEN,3200,2400)
             compose.setContent{MaterialTheme{PhotoContent(item(file,3200,2400),Modifier.fillMaxSize())}}
             loaded()

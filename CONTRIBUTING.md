@@ -26,6 +26,10 @@ tests deliberately change grants, sessions and inventories. Create synthetic
 test media instead of using a personal gallery. Real-cloud tests are opt-in
 and must use a test account.
 
+The owned Android safety corpus generator uses Python 3.11+ (CI uses 3.12),
+`requirements-safety.txt`, and FFmpeg. Generate its assets before compiling the
+instrumentation APK. These dependencies are separate from the offline decoder.
+
 ## Data integrity changes
 
 - Keep original containers separate from thumbnails, video renditions and caches.

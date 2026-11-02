@@ -6,7 +6,7 @@
       "mime": "image/jpeg",
       "kind": "image",
       "bytes": 1775,
-      "sha256": "93c618be48c296ad5c7f60c4c2cb1f2a99aa267fbf0e7c291f1113904b1e198e",
+      "sha256": "0b31dcacc415dd89816a1fc31e9fca947660f5a2dbe9c19e26476c7efd8857ce",
       "width": 128,
       "height": 96,
       "orientation": 1
@@ -16,7 +16,7 @@
       "mime": "image/jpeg",
       "kind": "image",
       "bytes": 1775,
-      "sha256": "e207c1f8d6c5d4057635fb5dac1dc53feede3af317445c9c1694d326607a3c14",
+      "sha256": "0487de7f7936b16acc7fbc06f483311db25f902c5e0d75ab52ffd9d7009f330d",
       "width": 96,
       "height": 128,
       "orientation": 6
@@ -26,7 +26,7 @@
       "mime": "image/jpeg",
       "kind": "image",
       "bytes": 1775,
-      "sha256": "6b8c5474c5866508a68209fba7994bd532280f16e0e79b58aaaa5d7d6cf13c0b",
+      "sha256": "5b784c29edddf8d36df521362be6b0ae34ff0c3363f5e343b9c0ffc2958b55fc",
       "width": 96,
       "height": 128,
       "orientation": 8
@@ -35,8 +35,8 @@
       "name": "alpha.png",
       "mime": "image/png",
       "kind": "image",
-      "bytes": 715,
-      "sha256": "6453d4ffab0ee979afcbbc7046a1d524b40ef1df609d7e4af67337f55f5fff6b",
+      "bytes": 716,
+      "sha256": "1cba85f8ba3020908a90e70f18cc13c2d0540c5e6a1647b8630e57d1e1c01816",
       "width": 128,
       "height": 96,
       "alpha": true
@@ -84,7 +84,7 @@
       "mime": "image/avif",
       "kind": "image",
       "bytes": 1037,
-      "sha256": "c09606ff35e7fed5eb513a011644e2db85f6d15b2069f99eb9c522c17ce4df82",
+      "sha256": "d70a5c9cea873fa51fc0ea3b0d03bf187e19aec468b46b620e4eed18fde42517",
       "width": 128,
       "height": 96
     },
@@ -93,7 +93,7 @@
       "mime": "image/heic",
       "kind": "image",
       "bytes": 1352,
-      "sha256": "12e9f1212112e0211daaaf5da8a1c1ac50b4e0cd99e20d428b71fc9bf2ee15a8",
+      "sha256": "e20378ffe778b3fa3ddb2c8b253f8e91d93bcb0acc7299e1bc164ffecabd0777",
       "width": 128,
       "height": 96
     },
@@ -102,7 +102,7 @@
       "mime": "image/tiff",
       "kind": "archive-only",
       "bytes": 1650,
-      "sha256": "0af50b748a5f607fd46bdd7f152e20917d48906ffc1007455f065a11b0755ea8"
+      "sha256": "fe23dbd5a929f7a8c5bb3bf3c9845502dc4d3ad19a6aa7514126f7653de8eda1"
     },
     {
       "name": "h264.mp4",
@@ -130,6 +130,13 @@
       "sha256": "acfb5c3bd9620c55bb85e06a93027c158e82903e4422b8d221930f9d86c558ad",
       "width": 160,
       "height": 96
+    },
+    {
+      "name": "muxer-audio.m4a",
+      "mime": "audio/mp4",
+      "kind": "archive-only",
+      "bytes": 5864,
+      "sha256": "bbc69c7827f8e55159c155835b9e2652c92be18887fedaa002979f84d6629820"
     }
   ]
 }

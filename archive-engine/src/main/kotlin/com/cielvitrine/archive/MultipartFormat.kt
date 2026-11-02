@@ -18,14 +18,17 @@ import java.security.MessageDigest
     fun length(index: Long): Long { validate(); require(index in 0 until parts)
         return minOf(partBytes.toLong(), bytes - Math.multiplyExact(index, partBytes.toLong())) }
 }
-@Serializable data class MultipartObject(val id: String, val proof: ArchiveProof, val remote: ArchiveRemote) {
+@Serializable data class MultipartObject(val id: String, val proof: ArchiveProof, val remote: ArchiveRemote,
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val extension: ContainerExtension = ContainerExtension.BIN) {
     fun validate() {
         require(id.matches(MultipartFormat.ID) && proof.bundleId.matches(MultipartFormat.ID))
         require(proof.originalBytes >= 0 && proof.containerBytes > 0 && proof.originalSha256.matches(MultipartFormat.SHA) && proof.containerSha256.matches(MultipartFormat.SHA))
         require(remote.id.isNotBlank() && remote.id.length <= 4096 && remote.modified.isNotBlank() && remote.modified.length <= 256)
         require(remote.bytes == proof.containerBytes && (remote.sha256 == null || remote.sha256.equals(proof.containerSha256, true)))
     }
-    fun path(zone: OriginalZone) = "app:/ciel-vitrine-v2/${if(zone == OriginalZone.COLD) "cold" else "gallery"}/$id.bin"
+    fun path(zone: OriginalZone) = "app:/ciel-vitrine-v2/${if(zone == OriginalZone.COLD) "cold" else "gallery"}/$id${extension.suffix}"
 }
 @Serializable data class MultipartPart(val index: Long, val offset: Long, val bytes: Long, val sha: String,
     val objectRef: MultipartObject) {

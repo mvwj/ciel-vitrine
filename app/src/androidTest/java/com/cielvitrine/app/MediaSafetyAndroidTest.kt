@@ -57,7 +57,7 @@ class MediaSafetyAndroidTest {
     }
     @Test fun generatedModernFormatsRecoverExactBytesDatesAndDecodedAppearance() {
         val manifest = JSONObject(instrument.context.assets.open("safety-corpus/manifest.json").bufferedReader().use { it.readText() })
-        val fixtures = manifest.getJSONArray("fixtures"); assertEquals(14, fixtures.length())
+        val fixtures = manifest.getJSONArray("fixtures"); assertEquals(15, fixtures.length())
         val scope = File(context.cacheDir, "safety-run-${UUID.randomUUID()}").apply { mkdirs() }
         val results = JSONArray()
         try {

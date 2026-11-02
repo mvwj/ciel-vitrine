@@ -80,6 +80,10 @@ internal class OriginalPhotoView(context: Context) : View(context), Drawable.Cal
     internal val loadedHeight get() = rawHeight
     internal val visibleRegion get() = tileRect?.let { Rect(it) }
     internal val tileWidth get() = tile?.width ?: 0
+    internal val cloudDetailCount get()=remoteTiles.size
+    internal val cloudDetailSamples get()=remoteTiles.map{it.coordinate.sample}
+    internal val cloudCacheKeys get()=remote?.cacheKeys().orEmpty()
+    internal val detailLoading get()=tilePending
     internal val hasHdr get() = (Build.VERSION.SDK_INT >= 34 && preview?.hasGainmap() == true) ||
         preview?.colorSpace?.name?.let { it.contains("HLG",true) || it.contains("PQ",true) } == true
     internal val tileHasHdr get() = Build.VERSION.SDK_INT >= 34 && tile?.hasGainmap() == true

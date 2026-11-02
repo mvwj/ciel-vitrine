@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Rect
 import android.util.AtomicFile
 import com.cielvitrine.archive.ArchiveJob
+import com.cielvitrine.archive.ContainerExtension
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -51,13 +52,16 @@ internal data class TileEntry(val coordinate:TileCoordinate,val pack:String,val 
         return TileEntry(TileCoordinate(j.getInt("sample"),j.getInt("x"),j.getInt("y"),rect("core"),rect("expanded")),j.getString("pack"),j.getLong("offset"),j.getInt("length"),j.getString("sha"))
     } }
 }
-internal data class TilePack(val id:String,val bytes:Long,val sha:String,val attempted:Boolean=false,val remoteId:String?=null,val modified:String?=null) {
-    val path get()="app:/ciel-vitrine-v2/tiles/$id.bin"
+internal data class TilePack(val id:String,val bytes:Long,val sha:String,val attempted:Boolean=false,val remoteId:String?=null,val modified:String?=null,
+    val extension:ContainerExtension=ContainerExtension.BIN) {
+    val path get()="app:/ciel-vitrine-v2/tiles/$id${extension.suffix}"
     val verified get()=remoteId!=null && modified!=null
     fun json()=JSONObject().put("id",id).put("bytes",bytes).put("sha",sha).put("attempted",attempted)
         .put("remote",remoteId ?: JSONObject.NULL).put("modified",modified ?: JSONObject.NULL)
+        .also{if(extension!=ContainerExtension.BIN)it.put("extension",extension.name)}
     companion object {fun parse(j:JSONObject)=TilePack(j.getString("id"),j.getLong("bytes"),j.getString("sha"),j.getBoolean("attempted"),
-        if(j.isNull("remote"))null else j.getString("remote"),if(j.isNull("modified"))null else j.getString("modified"))}
+        if(j.isNull("remote"))null else j.getString("remote"),if(j.isNull("modified"))null else j.getString("modified"),
+        ContainerExtension.valueOf(j.optString("extension",ContainerExtension.BIN.name)))}
 }
 internal data class TileCatalog(val id:String,val uid:String,val root:String,val originalSha:String,val containerSha:String,
     val width:Int,val height:Int,val orientation:Int,val hdr:Boolean,val tiles:List<TileEntry> = emptyList(),

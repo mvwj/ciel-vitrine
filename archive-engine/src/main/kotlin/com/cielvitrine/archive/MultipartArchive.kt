@@ -3,10 +3,14 @@ package com.cielvitrine.archive
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.EncodeDefault
 
 @Serializable data class MultipartIntent(val id: String, val proof: ArchiveProof,
-    val attempted: Boolean = false, val remote: ArchiveRemote? = null) {
-    fun reference(): MultipartObject = MultipartObject(id, proof, remote ?: error("Object not verified")).also { it.validate() }
+    val attempted: Boolean = false, val remote: ArchiveRemote? = null,
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val extension: ContainerExtension = ContainerExtension.BIN) {
+    fun path(zone: OriginalZone) = "app:/ciel-vitrine-v2/${if(zone == OriginalZone.COLD) "cold" else "gallery"}/$id${extension.suffix}"
+    fun reference(): MultipartObject = MultipartObject(id, proof, remote ?: error("Object not verified"),extension).also { it.validate() }
 }
 @Serializable data class PlannedPart(val index: Long, val offset: Long, val bytes: Long, val sha: String,
     val intent: MultipartIntent? = null) {
@@ -109,6 +113,7 @@ class MultipartArchive(private val jobs: ArchiveJournal, private val journal: Mu
             require(index == -1L)
             staging.prepareManifest(MultipartFormat.rootBytes(root), p, id).also { journal.save(state.copy(pendingRoot = it)) }
         }
+        require(pending.extension == job.containerExtension) { "Root path does not match durable job" }
         if(job.proof == null) {
             val proof = pending.proof.copy(originalBytes = p.bytes, originalSha256 = p.sha, times = p.times)
             jobs.save(jobs.load(id).copy(phase = ArchivePhase.PREPARED, proof = proof, multipart = MultipartCommit(pending.proof, p.parts)))
@@ -130,7 +135,7 @@ class MultipartArchive(private val jobs: ArchiveJournal, private val journal: Mu
     private fun advance(intent: MultipartIntent, zone: OriginalZone, save: (MultipartIntent) -> Unit): MultipartIntent {
         check(!stopped())
         if(intent.remote != null) { requireCurrent(intent.reference(), zone); return intent }
-        val path = "app:/ciel-vitrine-v2/${if(zone == OriginalZone.COLD) "cold" else "gallery"}/${intent.id}.bin"
+        val path = intent.path(zone)
         if(!intent.attempted) {
             if(zone == OriginalZone.COLD) cloud.ensureColdFolders() else cloud.ensureGalleryFolders()
             staging.open(intent.id).use { input ->
@@ -145,7 +150,7 @@ class MultipartArchive(private val jobs: ArchiveJournal, private val journal: Mu
         timed("verify") {
             val before = cloud.inspect(path) ?: error("Uncertain object not observed; PUT must not repeat")
             require(before.bytes == intent.proof.containerBytes && (before.sha256 == null || before.sha256.equals(intent.proof.containerSha256, true)))
-            val ref = MultipartObject(intent.id, intent.proof, before)
+            val ref = MultipartObject(intent.id, intent.proof, before,intent.extension)
             cloud.readback(path) { MultipartFormat.decodeObject(ref, it, ColdArchive.Sink) }
             require(cloud.inspect(path) == before); remote = before
         }

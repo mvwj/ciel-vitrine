@@ -22,6 +22,24 @@ class ArchiveStoreAndroidTest {
         }
     }
     private fun job(id: String = "a".repeat(32)) = ArchiveJob(id, null, null, "content://private/source", "private-name.heic", "image/heic", 123)
+    @Test fun largeQueuedFileYieldsToNewFilesAndCursorSurvivesReopenWithoutChangingProofs() = isolated { directory,alias ->
+        ArchiveStore(context,directory,alias).use { store ->
+            store.save(job().copy(transport=OriginalTransport.MULTIPART,containerExtension=ContainerExtension.CV2))
+            store.save(job("b".repeat(32)))
+            assertEquals("a".repeat(32),store.next()!!.id)
+            assertEquals("a".repeat(32),store.next()!!.id) // a status read is not a dequeue
+            val original=store.load("a".repeat(32));store.yieldAfterStep(original.id)
+            assertEquals(original,store.load(original.id));assertEquals("b".repeat(32),store.next()!!.id)
+        }
+        ArchiveStore(context,directory,alias).use { store ->
+            assertEquals("b".repeat(32),store.next()!!.id);store.yieldAfterStep("b".repeat(32))
+            assertEquals("a".repeat(32),store.next()!!.id)
+            val proof=ArchiveProof("f".repeat(32),123,"d".repeat(64),900,"e".repeat(64))
+            val next=store.load("b".repeat(32));store.save(next.copy(uid="123",rootId="root",proof=proof,phase=ArchivePhase.UPLOAD_UNCERTAIN))
+            assertEquals(next.id,store.next()!!.id)
+            store.save(store.load(next.id).copy(deferred=true));assertEquals("a".repeat(32),store.next()!!.id)
+        }
+    }
     @Test fun encryptedRowsSurviveRecreationAndRejectTamperIdentitySwapAndStaleWrites() = isolated { directory, alias ->
         ArchiveStore(context, directory, alias).use { store ->
             store.save(job()); val saved = store.load(job().id)

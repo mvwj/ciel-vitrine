@@ -1,4 +1,4 @@
-"""Independent CVMP1 recovery from a directory of downloaded .bin objects.
+"""Independent CVMP1 recovery from downloaded .bin and .cv2 objects.
 
 No Android account, application key, journal or encoder modules are required.
 The destination is created exclusively and removed on any failed verification.
@@ -31,7 +31,9 @@ def decode_object(directory, ref, output):
     check(isinstance(ref, dict) and ID.fullmatch(ref["id"]), "Invalid object ID")
     proof = ref["proof"]
     check(ID.fullmatch(proof["bundleId"]) and SHA.fullmatch(proof["originalSha256"]) and SHA.fullmatch(proof["containerSha256"]), "Invalid proof")
-    path = directory / (ref["id"] + ".bin")
+    extension = ref.get("extension", "BIN")
+    check(extension in ("BIN", "CV2"), "Unknown container extension")
+    path = directory / (ref["id"] + {"BIN": ".bin", "CV2": ".cv2"}[extension])
     check(path.stat().st_size == proof["containerBytes"], "Container length mismatch")
     digest = hashlib.sha256()
     with path.open("rb") as source:

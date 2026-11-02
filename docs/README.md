@@ -7,6 +7,7 @@ original scope and are not statements about the current version.
 
 ## Start here
 
+- [Current repair plan and acceptance criteria — 2 November 2026](REPAIR_PLAN_2026_11_02_RU.md)
 - [Architecture and module map](ARCHITECTURE.md)
 - [Yandex OAuth setup](YANDEX_SETUP_RU.md)
 - [Requirements and development plan](DEVELOPMENT_PLAN_RU.md)
@@ -26,6 +27,7 @@ original scope and are not statements about the current version.
 
 ## Validation
 
+- [0.1.13 transfer controls, container suffixes and cloud photo zoom](VALIDATION_0_1_13_RU.md)
 - [0.1.11 cloud status, two-copy workflow and Android consent](VALIDATION_0_1_11_RU.md)
 - [0.1.10 integration and measured limits](INTEGRATION_2026_10_30_RU.md) · [structured results](fixtures/validation-0.1.10.json)
 - [0.1.9 partial cloud viewing and measurements](VALIDATION_0_1_9_RU.md)

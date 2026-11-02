@@ -72,6 +72,36 @@ import androidx.compose.ui.unit.dp
     }
 }
 
+@Composable internal fun SelectedTransfersCard(archive:ArchiveUiState) {
+    val plans=archive.plans.filter{it.coldId in archive.benchmarkIds}
+    if(plans.isEmpty())return
+    val statusById=archive.mediaStatus.values.mapNotNull{s->s.jobId?.let{it to s}}.toMap()
+    Surface(Modifier.fillMaxWidth().padding(horizontal=16.dp),color=MaterialTheme.colorScheme.surfaceVariant,shape=MaterialTheme.shapes.medium) {
+        Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            Text("Выбранные файлы · ${plans.size}",style=MaterialTheme.typography.titleMedium)
+            plans.forEach { plan ->
+                val status=statusById[plan.coldId] ?: plan.workingId?.let{statusById[it]}
+                Row(verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(10.dp)) {
+                    val done=plan.stage in setOf(ProtectionStage.SAVED,ProtectionStage.READY,ProtectionStage.ANDROID_REQUESTED,ProtectionStage.LOCAL_REMOVED)
+                    Icon(if(done)Icons.Outlined.CloudDone else if(plan.stage==ProtectionStage.ERROR)Icons.Outlined.ErrorOutline else Icons.Outlined.CloudUpload,null,
+                        tint=if(done)Color(0xFFA6E3BC)else MaterialTheme.colorScheme.onSurface)
+                    Column(Modifier.weight(1f)) {
+                        Text(plan.displayName.ifBlank{"Выбранный файл"},maxLines=1,overflow=androidx.compose.ui.text.style.TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)
+                        Text(if(done)"Холодный архив и рабочая копия сохранены" else when(plan.stage) {
+                            ProtectionStage.WORKING_COPY->"Рабочая копия · ${status?.title ?: "в очереди"}"
+                            ProtectionStage.PREVIEW->"Две копии сохранены · готовим просмотр"
+                            ProtectionStage.ERROR->plan.notice ?: "Загрузка остановлена. Исходник сохранён."
+                            else->"Холодный архив · ${status?.title ?: "в очереди"}"
+                        },style=MaterialTheme.typography.bodySmall)
+                        status?.progress?.let{progress->LinearProgressIndicator(progress={progress},modifier=Modifier.fillMaxWidth().padding(top=4.dp))}
+                    }
+                }
+            }
+            Text("Исходники остаются на телефоне до отдельного подтверждения удаления.",style=MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
 @Composable internal fun ProtectionCard(plan:ProtectionPlan,busy:Boolean,release:()->Unit,retry:()->Unit,setReady:Boolean=true) {
     Surface(Modifier.fillMaxWidth().padding(horizontal=16.dp),color=MaterialTheme.colorScheme.surfaceVariant,shape=MaterialTheme.shapes.medium) {
         Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -80,7 +110,7 @@ import androidx.compose.ui.unit.dp
                 ProtectionStage.ARCHIVING->"1 из 3 · Холодный архив"
                 ProtectionStage.WORKING_COPY->"2 из 3 · Рабочая копия"
                 ProtectionStage.PREVIEW->"3 из 3 · Просмотр из облака"
-                ProtectionStage.READY,ProtectionStage.ANDROID_REQUESTED->"Готово к освобождению места"
+                ProtectionStage.READY,ProtectionStage.ANDROID_REQUESTED->if(LocalRelease.RECOVERY_RELEASE_VALIDATED)"Готово к освобождению места" else "Сохранено; освобождение пока недоступно"
                 ProtectionStage.LOCAL_REMOVED->"Оригинал на телефоне удалён"
                 ProtectionStage.SAVED->"Сохранено в двух зонах облака"
                 ProtectionStage.ERROR->"Подготовка остановлена"
@@ -92,7 +122,7 @@ import androidx.compose.ui.unit.dp
                 else->"Исходник остаётся на телефоне до завершения всех проверок."
             },style=MaterialTheme.typography.bodySmall)
             if(plan.stage in setOf(ProtectionStage.READY,ProtectionStage.ANDROID_REQUESTED))
-                Button(onClick=release,enabled=!busy && setReady){Text("Освободить место на телефоне")}
+                Button(onClick=release,enabled=LocalRelease.RECOVERY_RELEASE_VALIDATED && !busy && setReady){Text("Освободить место на телефоне")}
             if(plan.stage==ProtectionStage.ERROR)OutlinedButton(onClick=retry,enabled=!busy){Text("Повторить")}
         }
     }

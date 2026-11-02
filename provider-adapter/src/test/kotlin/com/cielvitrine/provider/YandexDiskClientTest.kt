@@ -124,7 +124,10 @@ class YandexDiskClientTest {
             }.build()
             val client = YandexDiskClient({ "test-token" }, server.url("/v1/disk/"), http)
             server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/upload","method":"PUT","templated":false}"""))
-            assertTrue(client.uploadNew("app:/test.cv2", original.size.toLong()) { original.inputStream() }.accepted)
+            val uploaded=client.uploadNew("app:/test.cv2", original.size.toLong()) { original.inputStream() }
+            assertTrue(uploaded.accepted)
+            assertEquals(original.size.toLong(),uploaded.timings!!.bodyBytes)
+            assertTrue(uploaded.timings!!.linkNanos>=0 && uploaded.timings!!.bodyNanos>=0 && uploaded.timings!!.requestNanos>=uploaded.timings!!.bodyNanos)
             assertEquals("false", server.takeRequest().requestUrl!!.queryParameter("overwrite"))
             server.enqueue(MockResponse().setBody("""{"href":"https://downloader.dst.yandex.ru/download","method":"GET","templated":false}"""))
             assertArrayEquals(original, client.fullReadback("app:/test.cv2") { it.readBytes() })

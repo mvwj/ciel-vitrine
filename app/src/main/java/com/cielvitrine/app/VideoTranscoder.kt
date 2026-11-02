@@ -25,11 +25,13 @@ import kotlin.coroutines.resumeWithException
 
 internal class UnsupportedVideoPreparation(message:String):IllegalArgumentException(message)
 
+@Serializable internal data class VideoTrackTiming(val mime:String,val firstUs:Long,val encoderDelayFrames:Int=0,val encoderPaddingFrames:Int=0,val sampleRate:Int=-1)
+
 @Serializable internal data class VideoInfo(val width: Int, val height: Int, val durationUs: Long,
     val audioTracks: Int, val transfer: Int, val standard: Int, val range: Int,
     val staticHdr: String?, val codec: String, val frameRate: Float = -1f,
     val rotation: Int = 0, val videoTracks: Int = 1, val otherTracks: Int = 0,
-    val audioFacts: List<String> = emptyList(), val firstSamplesUs: List<Long> = emptyList()) {
+    val audioFacts: List<String> = emptyList(), val firstSamplesUs: List<Long> = emptyList(),val trackTiming:List<VideoTrackTiming> = emptyList()) {
     val hdr: Boolean get() = transfer == MediaFormat.COLOR_TRANSFER_ST2084 || transfer == MediaFormat.COLOR_TRANSFER_HLG || staticHdr != null || codec == "video/dolby-vision"
     val shortEdge: Int get() = minOf(width,height)
     fun requireDerivative(source: VideoInfo, edge: Int) {
@@ -44,7 +46,21 @@ internal class UnsupportedVideoPreparation(message:String):IllegalArgumentExcept
         require(rotation == source.rotation || rotation == 0) { "Video orientation changed" }
         if (source.frameRate > 0f)
             require(frameRate.isFinite() && frameRate > 0f && kotlin.math.abs(frameRate-source.frameRate) <= 0.01f) { "Frame rate changed or unknown" }
-        if(source.firstSamplesUs.isNotEmpty()) {
+        if(source.trackTiming.isNotEmpty()) {
+            val tolerance=maxOf(250_000L,if(source.frameRate>0)kotlin.math.ceil(1_000_000.0/source.frameRate).toLong() else 250_000L)
+            fun byType(rows:List<VideoTrackTiming>)=rows.groupBy{it.mime.substringBefore('/')}
+            fun start(track:VideoTrackTiming):Long {
+                require(track.encoderDelayFrames>=0 && track.encoderPaddingFrames>=0)
+                val delay=if(track.encoderDelayFrames==0)0L else {
+                    require(track.mime.startsWith("audio/") && track.sampleRate>0)
+                    Math.multiplyExact(track.encoderDelayFrames.toLong(),1_000_000L)/track.sampleRate
+                }
+                return Math.addExact(track.firstUs,delay).also{require(it>=0){"Unaccounted negative presentation time"}}
+            }
+            val before=byType(source.trackTiming);val after=byType(trackTiming)
+            require(before.keys==after.keys && before.values.all{it.size==1} && after.values.all{it.size==1}) {"Track timeline identity changed"}
+            before.forEach{(type,tracks)->require(kotlin.math.abs(start(tracks.single())-start(after.getValue(type).single()))<=tolerance){"Timeline origin changed"}}
+        } else if(source.firstSamplesUs.isNotEmpty()) {
             require(firstSamplesUs.size==source.firstSamplesUs.size)
             val tolerance=maxOf(250_000L,if(source.frameRate>0) kotlin.math.ceil(1_000_000.0/source.frameRate).toLong() else 250_000L)
             require(firstSamplesUs.zip(source.firstSamplesUs).all { (a,b) -> a>=0 && b>=0 && kotlin.math.abs(a-b)<=tolerance }) { "Timeline origin changed" }
@@ -73,7 +89,7 @@ internal object VideoTranscoder {
     }
     private fun inspect(extractor: MediaExtractor): VideoInfo {
         var video: MediaFormat? = null; var audio = 0; var videos = 0; var others=0
-        val audioFacts=mutableListOf<String>();val firstSamples=mutableListOf<Long>()
+        val audioFacts=mutableListOf<String>();val firstSamples=mutableListOf<Long>();val timing=mutableListOf<VideoTrackTiming>()
         for(i in 0 until extractor.trackCount) { val format = extractor.getTrackFormat(i); val mime=format.getString(MediaFormat.KEY_MIME) ?: ""
             if(mime.startsWith("video/")) { videos++; if (video == null) video=format }
             if(mime.startsWith("audio/")) {
@@ -84,6 +100,8 @@ internal object VideoTranscoder {
             if(!mime.startsWith("video/") && !mime.startsWith("audio/"))others++
             extractor.selectTrack(i);extractor.seekTo(0,MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             firstSamples+=extractor.sampleTime;extractor.unselectTrack(i)
+            fun integer(key:String,fallback:Int=0)=if(format.containsKey(key))format.getInteger(key) else fallback
+            timing+=VideoTrackTiming(mime,firstSamples.last(),integer(MediaFormat.KEY_ENCODER_DELAY),integer(MediaFormat.KEY_ENCODER_PADDING),integer(MediaFormat.KEY_SAMPLE_RATE,-1))
         }
         val v = video ?: error("No video track")
         fun integer(key: String, fallback: Int = -1) = if(v.containsKey(key))v.getInteger(key) else fallback
@@ -92,7 +110,7 @@ internal object VideoTranscoder {
         val static = v.getByteBuffer(MediaFormat.KEY_HDR_STATIC_INFO)?.let { b -> val bytes=ByteArray(b.remaining());b.get(bytes);tileHash(bytes) }
         val duration=if(v.containsKey(MediaFormat.KEY_DURATION))v.getLong(MediaFormat.KEY_DURATION) else -1; require(duration>=0)
         return VideoInfo(if(portrait)h else w,if(portrait)w else h,duration,audio,integer(MediaFormat.KEY_COLOR_TRANSFER),integer(MediaFormat.KEY_COLOR_STANDARD),integer(MediaFormat.KEY_COLOR_RANGE),static,v.getString(MediaFormat.KEY_MIME)!!,
-            if(v.containsKey(MediaFormat.KEY_FRAME_RATE)) v.getNumber(MediaFormat.KEY_FRAME_RATE)?.toFloat() ?: -1f else -1f,rotation,videos,others,audioFacts,firstSamples)
+            if(v.containsKey(MediaFormat.KEY_FRAME_RATE)) v.getNumber(MediaFormat.KEY_FRAME_RATE)?.toFloat() ?: -1f else -1f,rotation,videos,others,audioFacts,firstSamples,timing)
     }
     suspend fun convert(context: Context, session: MultipartSession, output: File, edge: Int,
         info: VideoInfo, stopped: () -> Boolean = { false }) {
@@ -126,6 +144,10 @@ internal object VideoTranscoder {
             }
             try {
                 transformer=Transformer.Builder(context)
+                    // A verified cloud part can take longer to arrive than the default
+                    // local-file muxer watchdog permits. Keep a finite network-sized window.
+                    .setMaxDelayBetweenMuxerSamplesMs(90_000)
+                    .setMuxerFactory(AudioMetadataMuxerFactory(info.audioFacts.singleOrNull()?.substringBefore(':')))
                     .setVideoMimeType(if(info.hdr)MimeTypes.VIDEO_H265 else MimeTypes.VIDEO_H264)
                     .setEncoderFactory(DefaultEncoderFactory.Builder(context).setEnableFallback(false).build())
                     .setAssetLoaderFactory(ExoPlayerAssetLoader.Factory(context,DefaultDecoderFactory.Builder(context).build(),Clock.DEFAULT,sourceFactory))
@@ -139,7 +161,17 @@ internal object VideoTranscoder {
             } catch(e: Exception) { handler.removeCallbacks(watcher); fail(e) }
             continuation.invokeOnCancellation { handler.post { handler.removeCallbacks(watcher);transformer?.cancel() } }
         } }
-        inspect(output).requireDerivative(info,edge)
+        val converted=inspect(output)
+        if(BuildConfig.DEBUG)runCatching {
+            java.io.File(context.filesDir,"video-audio-comparison.json").writeText(org.json.JSONObject()
+                .put("at",System.currentTimeMillis()).put("source_audio",org.json.JSONArray(info.audioFacts))
+                .put("derived_audio",org.json.JSONArray(converted.audioFacts))
+                .put("source_first_us",org.json.JSONArray(info.firstSamplesUs)).put("derived_first_us",org.json.JSONArray(converted.firstSamplesUs))
+                .put("source_timing",org.json.JSONArray(info.trackTiming.map{org.json.JSONObject().put("mime",it.mime).put("first_us",it.firstUs).put("delay_frames",it.encoderDelayFrames).put("padding_frames",it.encoderPaddingFrames).put("sample_rate",it.sampleRate)}))
+                .put("derived_timing",org.json.JSONArray(converted.trackTiming.map{org.json.JSONObject().put("mime",it.mime).put("first_us",it.firstUs).put("delay_frames",it.encoderDelayFrames).put("padding_frames",it.encoderPaddingFrames).put("sample_rate",it.sampleRate)}))
+                .put("source_duration_us",info.durationUs).put("derived_duration_us",converted.durationUs).toString(2))
+        }
+        converted.requireDerivative(info,edge)
     }
     fun preparationProblem(info:VideoInfo,edge:Int):String?=when {
         edge<=0 || edge>info.shortEdge -> "Разрешение выше исходного недоступно. Используйте оригинал."

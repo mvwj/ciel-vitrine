@@ -56,7 +56,7 @@ internal class VideoViewStore(private val context: Context, private val original
         load(quality)?.let{old->return@synchronized if(old.job.deferred)update(quality){it.copy(
             generation=Math.addExact(it.generation,1),job=it.job.copy(deferred=false,notice=null))}else old}
         val id=ArchiveStore.randomId();val job=ArchiveJob(id,original.uid,original.rootId,Uri.fromFile(output(id)).toString(),"view-${quality.edge}.mp4","video/mp4",null,
-            zone=OriginalZone.VIEW,createdAt=System.currentTimeMillis(),containerExtension=ContainerExtension.BIN,transport=OriginalTransport.MULTIPART)
+            zone=OriginalZone.VIEW,createdAt=System.currentTimeMillis(),containerExtension=ContainerExtension.CV2,transport=OriginalTransport.MULTIPART)
         VideoViewRequest(original.id,original.proof!!.originalSha256,quality,job).also{save(it)}
     }
     fun active(quality: VideoQuality, generation: Long): Boolean = synchronized(guard) {
@@ -191,7 +191,7 @@ class VideoViewWorker(context:Context,params:WorkerParameters):CoroutineWorker(c
             ViewerRuntime.source(Uri.fromFile(output).toString()).use {
                 val saved=YandexSessionStore(context).load() ?: error("Sign-in required")
                 require(saved.uid==original.uid && saved.appRootId==original.rootId)
-                val cloud=YandexArchiveCloud(context,saved);val jobs=store.journal(quality,expected)
+                val cloud=YandexArchiveCloud(context,saved,timingId={original.id},timingPrefix="rendition_");val jobs=store.journal(quality,expected)
                 val deadline=System.nanoTime()+180_000_000_000L
                 while(!stopping() && System.nanoTime()<deadline) {
                     val job=jobs.load(request.job.id)
@@ -206,10 +206,21 @@ class VideoViewWorker(context:Context,params:WorkerParameters):CoroutineWorker(c
             return Result.success()
         } catch(e:CancellationException){throw e}
         catch(error:Exception) {
+            if(BuildConfig.DEBUG)runCatching {
+                val site=error.stackTrace.firstOrNull{it.className.startsWith("com.cielvitrine.")}
+                val row=org.json.JSONObject().put("at",System.currentTimeMillis()).put("type",error.javaClass.simpleName)
+                    .put("site",site?.className?.substringAfterLast('.') ?: "native").put("line",site?.lineNumber ?: -1)
+                    .put("causes",org.json.JSONArray(generateSequence<Throwable>(error){it.cause}.take(8).map{it.javaClass.simpleName}.toList()))
+                if(error is androidx.media3.transformer.ExportException)row.put("export_error_code",error.errorCode)
+                val file=AtomicFile(File(context.filesDir,"video-preparation-failure.json"));val out=file.startWrite()
+                try{out.write(row.toString(2).toByteArray());file.finishWrite(out)}catch(e:Exception){file.failWrite(out);throw e}
+            }
             generation?.let { expected -> if(!isStopped && store.active(quality,expected))store.updateActive(quality,expected){
                 val notice=when(error) {
                     is UnsupportedVideoPreparation -> error.message
-                    is androidx.media3.transformer.ExportException -> "Видео не подготовлено: кодек/кодер или чтение источника недоступны. Оригинал сохранён."
+                    is androidx.media3.transformer.ExportException -> if(error.errorCode==androidx.media3.transformer.ExportException.ERROR_CODE_MUXING_TIMEOUT)
+                        "Подготовка остановлена: долго нет следующих данных для контейнера. Оригинал сохранён; повторите подготовку."
+                        else "Видео не подготовлено: кодек/кодер или чтение источника недоступны. Оригинал сохранён."
                     else -> "Видео не подготовлено. Оригинал сохранён; повторите проверку."
                 }
                 it.copy(job=it.job.copy(deferred=true,notice=notice))

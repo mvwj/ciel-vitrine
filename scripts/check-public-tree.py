@@ -60,7 +60,7 @@ def check():
                     scan(path, data)
                 elif header[1] in (b"commit", b"tag"):
                     for address in re.findall(rb"(?m)^(?:author|committer|tagger) .* <([^>]+)>", data):
-                        if not address.lower().endswith(b"@users.noreply.github.com"):
+                        if not address.lower().endswith(b"@users.noreply.github.com") and address.lower()!=b"noreply@github.com":
                             findings.add(("commit metadata", "use a GitHub noreply address"))
         finally:
             proc.stdin.close()
